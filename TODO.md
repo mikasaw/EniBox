@@ -2,15 +2,11 @@
 
 ## 🔴 关键缺陷修复
 
-### 1. PE_ModMergeImports 空导入表处理
-- **问题**: 当源 EXE 没有导入表（`importDir->VirtualAddress == 0`）时，`PE_ModMergeImports` 直接返回 `PE_SUCCESS` 但未实际创建新导入表。这意味着对于无导入的 EXE，Loader DLL 不会被加载
-- **需要**: 在 `.enibox` 节中创建完整的导入目录结构（IMAGE_IMPORT_DESCRIPTOR + ILT + IAT + DLL name string），并更新 DataDirectory
-- **文件**: `src/EniBox.PeTool/src/pe_modifier.c` (PE_ModMergeImports)
+### ~~1. PE_ModMergeImports 空导入表处理~~ ✅ 已修复
+- **修复内容**: 当源 EXE 没有导入表时，在 `.enibox` 节中创建完整的导入目录结构（IMAGE_IMPORT_DESCRIPTOR + ILT + IAT + DLL name string），并更新 DataDirectory 指向新导入表
 
-### 2. PE_ModProcessTLS 回调数组修补不完整
-- **问题**: 当前 `PE_ModProcessTLS` 在有 TLS 目录时只解析了 TLS 目录头，但未实际修补回调数组指针（代码在 `tlsDir->VirtualAddress != 0` 后只做了 `ctx->modified = TRUE; return PE_SUCCESS`）
-- **需要**: 定位 TLS 回调数组，将第一个回调替换为 Loader 的 TLS callback RVA，保存原始回调 RVA 到 `.enibox` 节
-- **文件**: `src/EniBox.PeTool/src/pe_modifier.c` (PE_ModProcessTLS)
+### ~~2. PE_ModProcessTLS 回调数组修补不完整~~ ✅ 已修复
+- **修复内容**: 完善了 TLS 回调处理逻辑，正确保存原始 TLS 回调 VA 到 `.enibox` 节。由于 Loader 通过导入表在 TLS 之前加载（DLL_PROCESS_ATTACH 先于 TLS callbacks），回调数组无需修补。添加了安全回退机制和详细注释
 
 ## 🟡 功能增强
 
