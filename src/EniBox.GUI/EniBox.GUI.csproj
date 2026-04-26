@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="..\EniBox.Loader\x64\Release\EniBox.Loader.dll" LogicalName="EniBox.Loader.x64.dll" Condition="Exists('..\EniBox.Loader\x64\Release\EniBox.Loader.dll')" />
-    <EmbeddedResource Include="..\EniBox.Loader\Win32\Release\EniBox.Loader.dll" LogicalName="EniBox.Loader.x86.dll" Condition="Exists('..\EniBox.Loader\Win32\
+    <EmbeddedResource Include="..\EniBox.Loader\Release\EniBox.Loader.dll" LogicalName="EniBox.Loader.x86.dll" Condition="Exists('..\EniBox.Loader\Release\EniBox.Loader.dll')" />
+  </ItemGroup>
 
 </Project>
