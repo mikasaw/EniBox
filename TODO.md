@@ -1,0 +1,49 @@
+# EniBox 待开展内容
+
+## 🔴 关键缺陷修复
+
+### 1. PE_ModMergeImports 空导入表处理
+- **问题**: 当源 EXE 没有导入表（`importDir->VirtualAddress == 0`）时，`PE_ModMergeImports` 直接返回 `PE_SUCCESS` 但未实际创建新导入表。这意味着对于无导入的 EXE，Loader DLL 不会被加载
+- **需要**: 在 `.enibox` 节中创建完整的导入目录结构（IMAGE_IMPORT_DESCRIPTOR + ILT + IAT + DLL name string），并更新 DataDirectory
+- **文件**: `src/EniBox.PeTool/src/pe_modifier.c` (PE_ModMergeImports)
+
+### 2. PE_ModProcessTLS 回调数组修补不完整
+- **问题**: 当前 `PE_ModProcessTLS` 在有 TLS 目录时只解析了 TLS 目录头，但未实际修补回调数组指针（代码在 `tlsDir->VirtualAddress != 0` 后只做了 `ctx->modified = TRUE; return PE_SUCCESS`）
+- **需要**: 定位 TLS 回调数组，将第一个回调替换为 Loader 的 TLS callback RVA，保存原始回调 RVA 到 `.enibox` 节
+- **文件**: `src/EniBox.PeTool/src/pe_modifier.c` (PE_ModProcessTLS)
+
+## 🟡 功能增强
+
+### 3. 端到端真实 PE 打包测试
+- **问题**: 现有 52 个测试覆盖模型/压缩/VFS/布局，但未使用真实 PE 文件测试完整 Pack→Save 流程（需要 PeTool DLL 在运行时可用）
+- **需要**: 创建集成测试，使用小型 console EXE 作为源，调用完整 PackAsync 流程，验证输出 EXE 包含 `.enibox` 节且 PE 结构有效
+
+### 4. Loader DLL 嵌入到输出 EXE
+- **问题**: 当前 `CombineSectionData` 将 Loader DLL 字节写入 `.enibox` 节数据区，但 Loader 的 `DllMain` 是通过导入表触发的——导入表引用的是外部 `EniBox.Loader.dll` 文件，而非节内嵌入的副本
+- **需要**: 两种方案选一：(A) 运行时从 `.enibox` 节提取 Loader DLL 写入临时文件再 LoadLibrary，或 (B) 修改导入表合并逻辑使 Loader 通过入口点存根加载而非导入表
+
+### 5. VFS 句柄伪文件系统完善
+- **问题**: `VFS_HandleAlloc` 返回的伪句柄需要确保不与真实 OS 句柄冲突，且 `Hook_ReadFile`/`Hook_GetFileSize` 等需要正确路由伪句柄到 VFS 读取
+- **需要**: 验证伪句柄范围（使用高地址或特殊标志位），确保所有 FileAPI Hook 正确处理伪句柄与真实句柄的分流
+
+## 🟢 质量与体验
+
+### 6. MinHook VEX/AVX 指令支持
+- **问题**: 增强版 `GetInstructionLength` 仍不支持 VEX 前缀（3 字节 `C4`/`C5`）和 EVEX 前缀（4 字节 `62`），AVX/AVX2 函数的 Hook 可能失败
+- **需要**: 添加 VEX/EVEX 前缀解码，或集成完整 MinHook 库
+
+### 7. 错误码与 C 端对齐验证
+- **问题**: C# `PackErrorCode` 常量与 PeTool C 端 `PE_ERR_*` 定义未做自动化对齐验证
+- **需要**: 添加测试验证 `PackErrorCode.SectionFull` 等与 `PE_ERR_SECTION_FULL` 数值一致
+
+### 8. CLI 模式 System.CommandLine 版本
+- **问题**: 使用的是 `2.0.0-beta4` 预发布版，API 可能在未来版本中变化
+- **需要**: 锁定版本或迁移到稳定版 `System.CommandLine`
+
+### 9. 发布配置优化
+- **问题**: 未配置 `PublishSingleFile`、`PublishTrimmed`、`IncludeNativeLibrariesForSelfExtract` 等发布属性
+- **需要**: 添加发布配置，使输出为单个 EXE（内嵌 Loader/PeTool DLL）
+
+### 10. 子进程注入架构匹配
+- **问题**: `Inject_ArchitectureMatches` 只检查当前进程与目标进程的位数是否匹配，未处理 WoW64 场景（32 位进程在 64 位系统上）
+- **需要**: 使用 `IsWow64Process` 检测目标进程的真实架构
