@@ -20,7 +20,7 @@
         <GroupBox Grid.Row="0" Header="{DynamicResource Str_SourceExe}" Margin="0,0,0,5">
             <DockPanel>
                 <Button DockPanel.Dock="Right" Content="{DynamicResource Str_Browse}" Width="80"
-                        Command="{Binding browseSourceCommand}" Margin="5,0,0,0"/>
+                        Command="{Binding BrowseSourceCommand}" Margin="5,0,0,0"/>
                 <TextBox Text="{Binding SourceExePath, UpdateSourceTrigger=PropertyChanged}" IsReadOnly="True"/>
             </DockPanel>
         </GroupBox>
@@ -43,7 +43,8 @@
                     <Button Content="{DynamicResource Str_Remove}" Command="{Binding RemoveFilesCommand}" Padding="10,2"/>
                 </StackPanel>
                 <DataGrid ItemsSource="{Binding FileItems}" AutoGenerateColumns="False"
-                          AllowDrop="True" SelectionMode="Extended" CanUserAddRows="False">
+                          AllowDrop="True" SelectionMode="Extended" CanUserAddRows="False"
+                          SelectedItem="{Binding SelectedFileItem}">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="{DynamicResource Str_VirtualPath}" Binding="{Binding VirtualPath}" Width="2*"/>
                         <DataGridTextColumn Header="{DynamicResource Str_SourcePath}" Binding="{Binding SourcePath}" Width="2*" IsReadOnly="True"/>

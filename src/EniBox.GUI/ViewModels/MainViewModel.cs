@@ -26,6 +26,14 @@ namespace EniBox.GUI.ViewModels
         [ObservableProperty]
         private ObservableCollection<PackFileItem> _fileItems = new();
 
+        private PackFileItem? _selectedFileItem;
+
+        public PackFileItem? SelectedFileItem
+        {
+            get => _selectedFileItem;
+            set => SetProperty(ref _selectedFileItem, value);
+        }
+
         [ObservableProperty]
         private PackProgress? _packProgress;
 
@@ -125,7 +133,11 @@ namespace EniBox.GUI.ViewModels
         [RelayCommand]
         private void RemoveFiles()
         {
-            // Remove selected items - handled via DataGrid selection
+            if (SelectedFileItem != null)
+            {
+                FileItems.Remove(SelectedFileItem);
+                SelectedFileItem = null;
+            }
         }
 
         [RelayCommand]
