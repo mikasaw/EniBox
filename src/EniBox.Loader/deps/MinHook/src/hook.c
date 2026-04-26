@@ -184,6 +184,54 @@ static size_t GetInstructionLength(void* pCode) {
         return offset + 2 + DecodeModRM(p + offset + 2, opcode2);
     }
 
+#ifdef _WIN64
+    /* VEX 2-byte prefix: C5 + R vvvv L pp + opcode + ModRM
+     * C5 encodes VEX with R=1 (no REX.R inversion), map 1 only.
+     * Format: C5 [R vvvv L pp] opcode ModRM [imm8] */
+    case 0xC5: {
+        uint8_t byte2 = p[offset + 1];
+        uint8_t opcode2 = p[offset + 2];
+        /* VEX.C5 always maps to 0F opcode map (map1) */
+        size_t len = 3 + DecodeModRM(p + offset + 3, opcode2);
+        /* Some VEX-encoded instructions have an imm8 operand */
+        /* Check for instructions that need imm8: VPSHUFB, VROUNDPS, etc. */
+        /* For safety, check common VEX map1 opcodes with imm8 */
+        if (opcode2 == 0x70 || opcode2 == 0x71 || opcode2 == 0x72 || opcode2 == 0x73 ||  /* VPSHUFD/VPSHUFLW/VPSHUFHW/VPSHUFB */
+            opcode2 == 0x0F || opcode2 == 0x1F)  /* VRNDSCALE/... */
+            len += 1; /* imm8 */
+        return offset + len;
+    }
+
+    /* VEX 3-byte prefix: C4 + [R X B mmmmm] + [W vvvv L pp] + opcode + ModRM [imm8]
+     * C4 can encode maps 0F, 0F38, 0F3A, and also XOP maps 8/9/A. */
+    case 0xC4: {
+        uint8_t byte2 = p[offset + 1];
+        uint8_t byte3 = p[offset + 2];
+        uint8_t opcode2 = p[offset + 3];
+        uint8_t map_select = byte2 & 0x1F; /* mmmmm field */
+        size_t len = 4 + DecodeModRM(p + offset + 4, opcode2);
+        /* Map 0F3A (map_select == 3) instructions have an imm8 */
+        if (map_select == 3) len += 1;
+        /* Some map 0F (map_select == 1) instructions also have imm8 */
+        if (map_select == 1 && (opcode2 == 0x70 || opcode2 == 0x71 || opcode2 == 0x72 || opcode2 == 0x73))
+            len += 1;
+        return offset + len;
+    }
+
+    /* EVEX 4-byte prefix: 62 + [R X B R' 00 mmmm] + [W vvvv 1 pp z L' L b] + opcode + ModRM [imm8]
+     * EVEX extends VEX for AVX-512. Only valid in 64-bit mode. */
+    case 0x62: {
+        uint8_t byte2 = p[offset + 1];
+        uint8_t byte3 = p[offset + 2];
+        uint8_t opcode2 = p[offset + 4];
+        uint8_t map_select = byte2 & 0x0F; /* mmmm field (4 bits for EVEX) */
+        size_t len = 5 + DecodeModRM(p + offset + 5, opcode2);
+        /* EVEX map 3 (0F3A equivalent) has imm8 */
+        if (map_select == 3) len += 1;
+        return offset + len;
+    }
+#endif
+
     default:
         /* Unrecognized opcode - return 1 byte as fallback */
         return offset + 1;

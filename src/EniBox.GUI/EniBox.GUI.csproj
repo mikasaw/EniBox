@@ -16,6 +16,15 @@
     <DefineConstants Condition="'$(CLI_MODE)' == 'true'">$(DefineConstants);CLI_MODE</DefineConstants>
   </PropertyGroup>
 
+  <!-- Publish configuration: single self-contained EXE with embedded native DLLs -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishTrimmed Condition="'$(CLI_MODE)' != 'true'">false</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
