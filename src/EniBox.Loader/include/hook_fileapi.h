@@ -10,7 +10,6 @@ typedef DWORD  (WINAPI *GetFileSize_t)(HANDLE, LPDWORD);
 typedef BOOL   (WINAPI *GetFileSizeEx_t)(HANDLE, PLARGE_INTEGER);
 typedef DWORD  (WINAPI *GetFileAttributesA_t)(LPCSTR);
 typedef DWORD  (WINAPI *GetFileAttributesW_t)(LPCWSTR);
-typedef BOOL   (WINAPI *CloseHandle_t)(HANDLE);
 typedef DWORD  (WINAPI *SetFilePointer_t)(HANDLE, LONG, PLONG, DWORD);
 HANDLE WINAPI Hook_CreateFileW(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
 HANDLE WINAPI Hook_CreateFileA(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
@@ -20,7 +19,6 @@ DWORD  WINAPI Hook_GetFileSize(HANDLE, LPDWORD);
 BOOL   WINAPI Hook_GetFileSizeEx(HANDLE, PLARGE_INTEGER);
 DWORD  WINAPI Hook_GetFileAttributesA(LPCSTR);
 DWORD  WINAPI Hook_GetFileAttributesW(LPCWSTR);
-BOOL   WINAPI Hook_CloseHandle(HANDLE);
 DWORD  WINAPI Hook_SetFilePointer(HANDLE, LONG, PLONG, DWORD);
 int32_t HookFile_Install(void);
 #endif

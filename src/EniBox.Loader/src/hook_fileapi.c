@@ -11,7 +11,6 @@ static GetFileSize_t  g_orig_GetFileSize  = NULL;
 static GetFileSizeEx_t g_orig_GetFileSizeEx = NULL;
 static GetFileAttributesA_t g_orig_GetFileAttributesA = NULL;
 static GetFileAttributesW_t g_orig_GetFileAttributesW = NULL;
-static CloseHandle_t  g_orig_CloseHandle  = NULL;
 static SetFilePointer_t g_orig_SetFilePointer = NULL;
 
 HANDLE WINAPI Hook_CreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode,
@@ -102,20 +101,9 @@ BOOL WINAPI Hook_WriteFile(HANDLE hFile, LPCVOID lpBuffer, DWORD nBytes,
     return g_orig_WriteFile(hFile, lpBuffer, nBytes, lpBytesWritten, lpOverlapped);
 }
 
-BOOL WINAPI Hook_CloseHandle(HANDLE hObject) {
-    /* Release virtual handle resources when the application closes a VFS handle */
-    if (VFS_IsVirtualHandle(hObject)) {
-        VFS_FILE_HANDLE* h = VFS_HandleFromOsHandle(hObject);
-        if (h) {
-            VFS_HandleFree(h);
-            return TRUE;
-        }
-        /* Handle is in virtual range but not valid - still return TRUE
-         * to match Windows CloseHandle behavior for already-closed handles */
-        return TRUE;
-    }
-    return g_orig_CloseHandle(hObject);
-}
+/* Note: CloseHandle is hooked in hook_filemapping.c which handles
+ * VFS virtual handles, find handles, AND mapping handles.
+ * Do NOT hook CloseHandle here to avoid MinHook conflict. */
 
 DWORD WINAPI Hook_SetFilePointer(HANDLE hFile, LONG lDistanceToMove,
     PLONG lpDistanceToMoveHigh, DWORD dwMoveMethod) {
@@ -163,7 +151,7 @@ int32_t HookFile_Install(void) {
     if (MH_CreateHook(&GetFileAttributesA, &Hook_GetFileAttributesA, (LPVOID*)&g_orig_GetFileAttributesA) != MH_OK) return -6;
     if (MH_CreateHook(&GetFileAttributesW, &Hook_GetFileAttributesW, (LPVOID*)&g_orig_GetFileAttributesW) != MH_OK) return -7;
     if (MH_CreateHook(&WriteFile, &Hook_WriteFile, (LPVOID*)&g_orig_WriteFile) != MH_OK) return -8;
-    if (MH_CreateHook(&CloseHandle, &Hook_CloseHandle, (LPVOID*)&g_orig_CloseHandle) != MH_OK) return -9;
+    /* CloseHandle is hooked in hook_filemapping.c - do not hook here */
     if (MH_CreateHook(&SetFilePointer, &Hook_SetFilePointer, (LPVOID*)&g_orig_SetFilePointer) != MH_OK) return -10;
     return 0;
 }
