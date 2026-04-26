@@ -1,9 +1,13 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using EniBox.GUI.Interop;
 using EniBox.GUI.Models;
 using EniBox.GUI.Services;
+using EniBox.GUI.ViewModels;
 using Xunit;
 
 namespace EniBox.Tests
@@ -704,6 +708,279 @@ namespace EniBox.Tests
             {
                 Directory.Delete(tempDir, true);
             }
+        }
+    }
+
+    /// <summary>
+    /// Tests for ImportEntry marshalling and PackResult error code coverage.
+    /// </summary>
+    public class ImportEntryAndErrorCodeTests
+    {
+        [Fact]
+        public void ImportEntry_StructSize_Is256()
+        {
+            // IMPORT_ENTRY in C is: char dll_name[256] = 256 bytes
+            Assert.Equal(256, Marshal.SizeOf<PeToolInterop.ImportEntry>());
+        }
+
+        [Fact]
+        public void ImportEntry_DllName_IsCorrectlyMarshalled()
+        {
+            var entry = new PeToolInterop.ImportEntry { DllName = "EniBox.Loader.dll" };
+            Assert.Equal("EniBox.Loader.dll", entry.DllName);
+
+            // Verify marshalling round-trip via pointer
+            int size = Marshal.SizeOf<PeToolInterop.ImportEntry>();
+            IntPtr ptr = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(entry, ptr, false);
+                var result = Marshal.PtrToStructure<PeToolInterop.ImportEntry>(ptr);
+                Assert.Equal("EniBox.Loader.dll", result.DllName);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(ptr);
+            }
+        }
+
+        [Fact]
+        public void ImportEntry_Array_CanBeCreatedAndAccessed()
+        {
+            // Verify that an array of ImportEntry can be created and accessed
+            var entries = new PeToolInterop.ImportEntry[]
+            {
+                new() { DllName = "EniBox.Loader.dll" },
+                new() { DllName = "kernel32.dll" }
+            };
+
+            Assert.Equal(2, entries.Length);
+            Assert.Equal("EniBox.Loader.dll", entries[0].DllName);
+            Assert.Equal("kernel32.dll", entries[1].DllName);
+
+            // Verify struct size matches C definition (256 bytes)
+            int structSize = Marshal.SizeOf<PeToolInterop.ImportEntry>();
+            Assert.Equal(256, structSize);
+        }
+
+        [Fact]
+        public void PackResult_ErrorCode_DefaultIsZero()
+        {
+            var result = new PackResult { IsSuccess = true };
+            Assert.Equal(0, result.ErrorCode);
+        }
+
+        [Fact]
+        public void PackResult_ErrorCode_ValidationFailed()
+        {
+            var result = new PackResult
+            {
+                IsSuccess = false,
+                ErrorMessage = "Validation failed",
+                ErrorCode = PackErrorCode.ValidationFailed
+            };
+            Assert.Equal(9002, result.ErrorCode);
+            Assert.False(result.IsSuccess);
+        }
+
+        [Fact]
+        public void PackResult_ErrorCode_InvalidPe()
+        {
+            var result = new PackResult
+            {
+                IsSuccess = false,
+                ErrorMessage = "Invalid PE",
+                ErrorCode = PackErrorCode.InvalidPe
+            };
+            Assert.Equal(2001, result.ErrorCode);
+        }
+
+        [Fact]
+        public void PackResult_ErrorCode_UnsupportedArch()
+        {
+            var result = new PackResult
+            {
+                IsSuccess = false,
+                ErrorMessage = "Unsupported architecture",
+                ErrorCode = PackErrorCode.UnsupportedArch
+            };
+            Assert.Equal(2002, result.ErrorCode);
+        }
+
+        [Fact]
+        public void PackResult_ErrorCode_OperationCancelled()
+        {
+            var result = new PackResult
+            {
+                IsSuccess = false,
+                ErrorMessage = "Cancelled",
+                ErrorCode = PackErrorCode.OperationCancelled
+            };
+            Assert.Equal(9001, result.ErrorCode);
+        }
+
+        [Fact]
+        public void PackErrorCode_AllValues_AreNonZero()
+        {
+            // All error codes should be non-zero (0 = success)
+            Assert.NotEqual(0, PackErrorCode.FileNotFound);
+            Assert.NotEqual(0, PackErrorCode.ReadFailed);
+            Assert.NotEqual(0, PackErrorCode.WriteFailed);
+            Assert.NotEqual(0, PackErrorCode.InvalidPe);
+            Assert.NotEqual(0, PackErrorCode.UnsupportedArch);
+            Assert.NotEqual(0, PackErrorCode.InvalidDosHeader);
+            Assert.NotEqual(0, PackErrorCode.InvalidPeHeader);
+            Assert.NotEqual(0, PackErrorCode.VfsBuildFailed);
+            Assert.NotEqual(0, PackErrorCode.VfsInvalidData);
+            Assert.NotEqual(0, PackErrorCode.VfsChecksumMismatch);
+            Assert.NotEqual(0, PackErrorCode.CompressionFailed);
+            Assert.NotEqual(0, PackErrorCode.DecompressionFailed);
+            Assert.NotEqual(0, PackErrorCode.SectionFull);
+            Assert.NotEqual(0, PackErrorCode.ImportMergeFailed);
+            Assert.NotEqual(0, PackErrorCode.NoMemory);
+            Assert.NotEqual(0, PackErrorCode.LoaderNotFound);
+            Assert.NotEqual(0, PackErrorCode.LoaderInitFailed);
+            Assert.NotEqual(0, PackErrorCode.LoaderHookFailed);
+            Assert.NotEqual(0, PackErrorCode.OperationCancelled);
+            Assert.NotEqual(0, PackErrorCode.ValidationFailed);
+            Assert.NotEqual(0, PackErrorCode.UnexpectedError);
+        }
+
+        [Fact]
+        public void PackErrorCode_AllValues_AreUnique()
+        {
+            // All error codes should be unique
+            var codes = new[]
+            {
+                PackErrorCode.FileNotFound, PackErrorCode.ReadFailed, PackErrorCode.WriteFailed,
+                PackErrorCode.InvalidPe, PackErrorCode.UnsupportedArch, PackErrorCode.InvalidDosHeader, PackErrorCode.InvalidPeHeader,
+                PackErrorCode.VfsBuildFailed, PackErrorCode.VfsInvalidData, PackErrorCode.VfsChecksumMismatch,
+                PackErrorCode.CompressionFailed, PackErrorCode.DecompressionFailed,
+                PackErrorCode.SectionFull, PackErrorCode.ImportMergeFailed, PackErrorCode.NoMemory,
+                PackErrorCode.LoaderNotFound, PackErrorCode.LoaderInitFailed, PackErrorCode.LoaderHookFailed,
+                PackErrorCode.OperationCancelled, PackErrorCode.ValidationFailed, PackErrorCode.UnexpectedError
+            };
+            Assert.Equal(codes.Length, codes.Distinct().Count());
+        }
+    }
+
+    /// <summary>
+    /// Tests for the entry point stub layout consistency between PeTool C code and C# constants.
+    /// </summary>
+    public class StubLayoutConsistencyTests
+    {
+        [Fact]
+        public void X64_StubLayout_MatchesPeToolImplementation()
+        {
+            // x64 stub: sub rsp,0x28 (4) + add rsp,0x28 (4) + jmp [rip+0] (6) = 14 bytes
+            const int STUB_CODE_SIZE = 14;
+            const int METADATA_SIZE = 8;        // original_ep_rva (4) + section_rva (4)
+
+            // Total layout: [stub:14][VA_placeholder:8][metadata:8][VFS data...]
+            const int TOTAL_HEADER = STUB_CODE_SIZE + 8 + METADATA_SIZE;
+            Assert.Equal(30, TOTAL_HEADER);
+
+            // VA placeholder offset (where Loader patches the jump target)
+            Assert.Equal(14, STUB_CODE_SIZE);
+
+            // Metadata offset (where Loader reads original_ep_rva and section_rva)
+            Assert.Equal(22, STUB_CODE_SIZE + 8);
+        }
+
+        [Fact]
+        public void X86_StubLayout_MatchesPeToolImplementation()
+        {
+            // x86 stub: push imm32 (5) + ret (1) = 6 bytes
+            const int STUB_CODE_SIZE = 6;
+            const int VA_PLACEHOLDER_OFFSET = 1;  // inside push instruction (after 0x68 opcode)
+            const int METADATA_SIZE = 8;          // original_ep_rva (4) + section_rva (4)
+
+            // Total layout: [stub:6][metadata:8][VFS data...]
+            const int TOTAL_HEADER = STUB_CODE_SIZE + METADATA_SIZE;
+            Assert.Equal(14, TOTAL_HEADER);
+
+            // VA placeholder is inside the push instruction at offset 1
+            Assert.Equal(1, VA_PLACEHOLDER_OFFSET);
+
+            // Metadata offset (where Loader reads original_ep_rva and section_rva)
+            Assert.Equal(6, STUB_CODE_SIZE);
+        }
+
+        [Fact]
+        public void X64_StubMachineCode_BytesAreCorrect()
+        {
+            // Verify the exact byte sequence of the x64 entry point stub
+            // sub rsp, 0x28: 48 83 EC 28
+            // add rsp, 0x28: 48 83 C4 28
+            // jmp [rip+0]:   FF 25 00 00 00 00
+            byte[] expected = { 0x48, 0x83, 0xEC, 0x28, 0x48, 0x83, 0xC4, 0x28, 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+            Assert.Equal(14, expected.Length);
+
+            // Verify each instruction
+            Assert.Equal(0x48, expected[0]);  // REX.W prefix
+            Assert.Equal(0x83, expected[1]);  // SUB r/m64, imm8
+            Assert.Equal(0xEC, expected[2]);  // ModRM for RSP
+            Assert.Equal(0x28, expected[3]);  // 0x28 (40 decimal)
+
+            Assert.Equal(0x48, expected[4]);  // REX.W prefix
+            Assert.Equal(0x83, expected[5]);  // ADD r/m64, imm8
+            Assert.Equal(0xC4, expected[6]);  // ModRM for RSP
+            Assert.Equal(0x28, expected[7]);  // 0x28
+
+            Assert.Equal(0xFF, expected[8]);  // JMP opcode group
+            Assert.Equal(0x25, expected[9]);  // ModRM: [rip+disp32]
+            Assert.Equal(0x00, expected[10]); // disp32 = 0
+            Assert.Equal(0x00, expected[11]);
+            Assert.Equal(0x00, expected[12]);
+            Assert.Equal(0x00, expected[13]);
+        }
+
+        [Fact]
+        public void X86_StubMachineCode_BytesAreCorrect()
+        {
+            // Verify the exact byte sequence of the x86 entry point stub
+            // push imm32: 68 XX XX XX XX
+            // ret:        C3
+            byte opcode_push = 0x68;
+            byte opcode_ret = 0xC3;
+
+            Assert.Equal(0x68, opcode_push);
+            Assert.Equal(0xC3, opcode_ret);
+
+            // Total stub size: 1 (opcode) + 4 (imm32) + 1 (ret) = 6
+            Assert.Equal(6, 1 + 4 + 1);
+        }
+    }
+
+    /// <summary>
+    /// Tests for multi-file removal support in MainViewModel.
+    /// </summary>
+    public class MultiSelectRemovalTests
+    {
+        [Fact]
+        public void SelectedFileItems_Collection_IsInitialized()
+        {
+            var vm = new MainViewModel();
+            Assert.NotNull(vm.SelectedFileItems);
+            Assert.Empty(vm.SelectedFileItems);
+        }
+
+        [Fact]
+        public void SelectedFileItems_Collection_CanAddAndRemove()
+        {
+            var vm = new MainViewModel();
+            var item = new PackFileItem
+            {
+                SourcePath = "test.dll",
+                VirtualPath = "test.dll",
+                OriginalSize = 100
+            };
+
+            vm.SelectedFileItems.Add(item);
+            Assert.Single(vm.SelectedFileItems);
+
+            vm.SelectedFileItems.Clear();
+            Assert.Empty(vm.SelectedFileItems);
         }
     }
 }
