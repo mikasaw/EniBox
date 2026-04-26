@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using EniBox.GUI.Interop;
 using EniBox.GUI.Models;
 
 namespace EniBox.GUI.Services
@@ -246,8 +248,6 @@ namespace EniBox.GUI.Services
 
         private static byte[]? SelectLoaderDll(PeArchitecture architecture)
         {
-            // In production, this loads the embedded Loader DLL resource
-            // For now, return null to indicate the resource needs to be embedded
             string resourceName = architecture switch
             {
                 PeArchitecture.X86 => "EniBox.Loader.x86.dll",
@@ -258,9 +258,14 @@ namespace EniBox.GUI.Services
             if (resourceName == null)
                 return null;
 
-            // TODO: Load from embedded resources
-            // This will be implemented when the Loader DLL is built
-            return Array.Empty<byte>();
+            var assembly = Assembly.GetExecutingAssembly();
+            using var? stream = assembly.GetManifestResourceStream(resourceName);
+            if (stream == null)
+                return null;
+
+            var data = new byte[stream.Length];
+            stream.ReadExactly(data, 0, data.Length);
+            return data;
         }
 
         private static byte[] CombineSectionData(VfsBuildResult vfsResult, byte[] loaderData, uint originalEntryPoint)
@@ -285,18 +290,41 @@ namespace EniBox.GUI.Services
 
         private static string? ApplyPeModifications(string sourcePath, string outputPath, byte[] sectionData)
         {
-            // TODO: Call PeTool DLL via PInvoke
-            // For now, create a simple copy with appended data
+            IntPtr ctx = IntPtr.Zero;
             try
             {
-                File.Copy(sourcePath, outputPath, true);
-                using var stream = new FileStream(outputPath, FileMode.Append);
-                stream.Write(sectionData, 0, sectionData.Length);
+                // Open the source PE file
+                int result = PeToolInterop.Open(sourcePath, out ctx);
+                if (result != 0 || ctx == IntPtr.Zero)
+                    return $"Failed to open PE file (error {result}).";
+
+                // Add the .enibox section with VFS + Loader data
+                const uint SECTION_CHARACTERISTICS = 0xC0000040;
+                // IMAGE_SCN_CNT_CODE | IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE
+                result = PeToolInterop.AddSection(ctx, ".enibox", sectionData, SECTION_CHARACTERISTICS);
+                if (result != 0)
+                    return $"Failed to add .enibox section (error {result}).";
+
+                // Process TLS callbacks to ensure Loader initializes before TLS
+                // (TLS handling is done inside PeTool; entry point is set by the section stub)
+                result = PeToolInterop.Save(ctx, outputPath);
+                if (result != 0)
+                    return $"Failed to save modified PE (error {result}).";
+
                 return null;
+            }
+            catch (DllNotFoundException ex)
+            {
+                return $"PeTool DLL not found: {ex.Message}. Ensure EniBox.PeTool.dll is in the application directory.";
             }
             catch (Exception ex)
             {
                 return $"PE modification failed: {ex.Message}";
+            }
+            finally
+            {
+                if (ctx != IntPtr.Zero)
+                    PeToolInterop.Close(ctx);
             }
         }
 

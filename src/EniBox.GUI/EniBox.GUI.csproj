@@ -22,4 +22,8 @@
     <Content Include="..\EniBox.Loader\x64\Release\EniBox.Loader.dll" Link="Resources\EniBox.Loader.x64.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\EniBox.Loader\x64\Release\EniBox.Loader.dll" LogicalName="EniBox.Loader.x64.dll" Condition="Exists('..\EniBox.Loader\x64\Release\EniBox.Loader.dll')" />
+    <EmbeddedResource Include="..\EniBox.Loader\Win32\Release\EniBox.Loader.dll" LogicalName="EniBox.Loader.x86.dll" Condition="Exists('..\EniBox.Loader\Win32\
+
 </Project>
