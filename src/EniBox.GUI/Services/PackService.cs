@@ -314,7 +314,11 @@ namespace EniBox.GUI.Services
                     return ($"Failed to process TLS callbacks (error {result}).", PackErrorCode.ImportMergeFailed);
 
                 // Merge Loader DLL into import table so it loads before entry point
-                result = PeToolInterop.MergeImports(ctx, IntPtr.Zero, 0);
+                var importEntries = new PeToolInterop.ImportEntry[]
+                {
+                    new() { DllName = "EniBox.Loader.dll" }
+                };
+                result = PeToolInterop.MergeImports(ctx, importEntries);
                 if (result != 0)
                     return ($"Failed to merge imports (error {result}).", PackErrorCode.ImportMergeFailed);
 

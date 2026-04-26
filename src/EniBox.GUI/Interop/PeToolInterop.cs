@@ -18,6 +18,16 @@ namespace EniBox.GUI.Interop
             public uint SizeOfHeaders;
         }
 
+        /// <summary>
+        /// C-compatible IMPORT_ENTRY struct matching PeTool's _IMPORT_ENTRY.
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi, Size = 256)]
+        public struct ImportEntry
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+            public string DllName;
+        }
+
         [DllImport(DllName, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
         private static extern int PE_Open(string pePath, out IntPtr ctx);
 
@@ -78,9 +88,24 @@ namespace EniBox.GUI.Interop
             return PE_SetEntryPoint(ctx, newEntryRva);
         }
 
-        public static int MergeImports(IntPtr ctx, IntPtr entries, uint count)
+        /// <summary>
+        /// Merge import entries into the PE import table.
+        /// </summary>
+        public static int MergeImports(IntPtr ctx, ImportEntry[] entries)
         {
-            return PE_MergeImports(ctx, entries, count);
+            int count = entries.Length;
+            if (count == 0) return 0;
+
+            // Pin the managed array in memory and pass its address to the native function
+            var handle = GCHandle.Alloc(entries, GCHandleType.Pinned);
+            try
+            {
+                return PE_MergeImports(ctx, handle.AddrOfPinnedObject(), (uint)count);
+            }
+            finally
+            {
+                handle.Free();
+            }
         }
 
         public static int ProcessTLS(IntPtr ctx)
