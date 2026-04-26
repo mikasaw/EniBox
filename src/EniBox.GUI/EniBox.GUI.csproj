@@ -1,14 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
+    <OutputType Condition="'$(CLI_MODE)' == 'true'">Exe</OutputType>
+    <OutputType Condition="'$(CLI_MODE)' != 'true'">WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
-    <UseWPF>true</UseWPF>
-    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF Condition="'$(CLI_MODE)' != 'true'">true</UseWPF>
+    <UseWPF Condition="'$(CLI_MODE)' == 'true'">false</UseWPF>
+    <UseWindowsForms Condition="'$(CLI_MODE)' != 'true'">true</UseWindowsForms>
+    <UseWindowsForms Condition="'$(CLI_MODE)' == 'true'">false</UseWindowsForms>
     <RootNamespace>EniBox.GUI</RootNamespace>
-    <AssemblyName>EniBox</AssemblyName>
+    <AssemblyName Condition="'$(CLI_MODE)' != 'true'">EniBox</AssemblyName>
+    <AssemblyName Condition="'$(CLI_MODE)' == 'true'">EniBox.CLI</AssemblyName>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <Nullable>enable</Nullable>
+    <DefineConstants Condition="'$(CLI_MODE)' == 'true'">$(DefineConstants);CLI_MODE</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,6 +30,16 @@
   <ItemGroup>
     <EmbeddedResource Include="..\EniBox.Loader\x64\Release\EniBox.Loader.dll" LogicalName="EniBox.Loader.x64.dll" Condition="Exists('..\EniBox.Loader\x64\Release\EniBox.Loader.dll')" />
     <EmbeddedResource Include="..\EniBox.Loader\Release\EniBox.Loader.dll" LogicalName="EniBox.Loader.x86.dll" Condition="Exists('..\EniBox.Loader\Release\EniBox.Loader.dll')" />
+  </ItemGroup>
+
+  <!-- Exclude GUI-specific files in CLI mode -->
+  <ItemGroup Condition="'$(CLI_MODE)' == 'true'">
+    <Compile Remove="App.xaml.cs" />
+    <Compile Remove="Views\MainWindow.xaml.cs" />
+    <Compile Remove="ViewModels\MainViewModel.cs" />
+    <Page Remove="Views\MainWindow.xaml" />
+    <Page Remove="App.xaml" />
+    <None Remove="Resources\*.xaml" />
   </ItemGroup>
 
 </Project>

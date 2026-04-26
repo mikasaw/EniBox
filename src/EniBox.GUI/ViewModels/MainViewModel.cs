@@ -34,6 +34,12 @@ namespace EniBox.GUI.ViewModels
             set => SetProperty(ref _selectedFileItem, value);
         }
 
+        /// <summary>
+        /// Collection of selected items for multi-select removal support.
+        /// Populated from DataGrid.SelectedItems via code-behind.
+        /// </summary>
+        public ObservableCollection<PackFileItem> SelectedFileItems { get; } = new();
+
         [ObservableProperty]
         private PackProgress? _packProgress;
 
@@ -133,8 +139,18 @@ namespace EniBox.GUI.ViewModels
         [RelayCommand]
         private void RemoveFiles()
         {
-            if (SelectedFileItem != null)
+            // Support multi-select removal via SelectedFileItems collection
+            if (SelectedFileItems.Count > 0)
             {
+                var itemsToRemove = SelectedFileItems.ToList();
+                SelectedFileItems.Clear();
+                foreach (var item in itemsToRemove)
+                    FileItems.Remove(item);
+                SelectedFileItem = null;
+            }
+            else if (SelectedFileItem != null)
+            {
+                // Fallback: single selection
                 FileItems.Remove(SelectedFileItem);
                 SelectedFileItem = null;
             }
@@ -150,15 +166,30 @@ namespace EniBox.GUI.ViewModels
                 _ => System.Globalization.CultureInfo.CurrentUICulture
             };
 
+            // Set both culture and UICulture for framework-level resource resolution
+            System.Threading.Thread.CurrentThread.CurrentCulture = culture;
             System.Threading.Thread.CurrentThread.CurrentUICulture = culture;
-            // Refresh resources
+
+            // Replace the resource dictionary (not clear+add, to avoid flicker)
             var app = Application.Current;
-            app.Resources.MergedDictionaries.Clear();
-            var dict = new ResourceDictionary
+            var newDict = new ResourceDictionary
             {
                 Source = new Uri($"Resources/Strings.{language}.xaml", UriKind.Relative)
             };
-            app.Resources.MergedDictionaries.Add(dict);
+
+            // Find and replace the existing string resource dictionary
+            var oldDict = app.Resources.MergedDictionaries
+                .FirstOrDefault(d => d.Source?.OriginalString?.Contains("Strings.") == true);
+            if (oldDict != null)
+            {
+                var index = app.Resources.MergedDictionaries.IndexOf(oldDict);
+                app.Resources.MergedDictionaries.RemoveAt(index);
+                app.Resources.MergedDictionaries.Insert(index, newDict);
+            }
+            else
+            {
+                app.Resources.MergedDictionaries.Add(newDict);
+            }
         }
 
         [RelayCommand]

@@ -44,7 +44,8 @@
                 </StackPanel>
                 <DataGrid ItemsSource="{Binding FileItems}" AutoGenerateColumns="False"
                           AllowDrop="True" SelectionMode="Extended" CanUserAddRows="False"
-                          SelectedItem="{Binding SelectedFileItem}">
+                          SelectedItem="{Binding SelectedFileItem}"
+                          SelectionChanged="FileDataGrid_SelectionChanged">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="{DynamicResource Str_VirtualPath}" Binding="{Binding VirtualPath}" Width="2*"/>
                         <DataGridTextColumn Header="{DynamicResource Str_SourcePath}" Binding="{Binding SourcePath}" Width="2*" IsReadOnly="True"/>
@@ -67,7 +68,7 @@
             <Button Content="{DynamicResource Str_Pack}" Command="{Binding PackCommand}"
                     Width="120" Height="35" FontSize="14" FontWeight="Bold"
                     DockPanel.Dock="Right" Margin="10,0,0,0"/>
-            <ProgressBar Value="{Binding PackProgress.ProgressPercent}" Minimum="0" Maximum="100" Height="20"/>
+            <ProgressBar Value="{Binding PackProgress.ProgressPercent, FallbackValue=0, TargetNullValue=0}" Minimum="0" Maximum="100" Height="20"/>
         </DockPanel>
 
         <!-- Log -->
