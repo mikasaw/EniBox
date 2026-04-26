@@ -47,6 +47,11 @@ namespace EniBox.GUI.ViewModels
         private bool _isPacking;
 
         [ObservableProperty]
+        private bool _canCancel;
+
+        private CancellationTokenSource? _packCts;
+
+        [ObservableProperty]
         private string _logText = string.Empty;
 
         [ObservableProperty]
@@ -202,6 +207,8 @@ namespace EniBox.GUI.ViewModels
             }
 
             IsPacking = true;
+            CanCancel = true;
+            _packCts = new CancellationTokenSource();
             LogText = string.Empty;
 
             var config = new PackConfiguration
@@ -220,7 +227,7 @@ namespace EniBox.GUI.ViewModels
 
             try
             {
-                var result = await _packService.PackAsync(config, progress, CancellationToken.None);
+                var result = await _packService.PackAsync(config, progress, _packCts.Token);
 
                 if (result.IsSuccess)
                 {
@@ -235,6 +242,11 @@ namespace EniBox.GUI.ViewModels
                         "EniBox", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
             }
+            catch (OperationCanceledException)
+            {
+                LogText += "[CANCELLED] Packaging was cancelled by user.\n";
+                MessageBox.Show("Packaging cancelled.", "EniBox", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
             catch (Exception ex)
             {
                 LogText += $"[EXCEPTION] {ex.Message}\n";
@@ -244,7 +256,16 @@ namespace EniBox.GUI.ViewModels
             finally
             {
                 IsPacking = false;
+                CanCancel = false;
+                _packCts?.Dispose();
+                _packCts = null;
             }
+        }
+
+        [RelayCommand(CanExecute = nameof(CanCancel))]
+        private void CancelPack()
+        {
+            _packCts?.Cancel();
         }
 
         public void AddDroppedFiles(string[] paths)

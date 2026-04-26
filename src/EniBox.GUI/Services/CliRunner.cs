@@ -79,18 +79,34 @@ namespace EniBox.GUI.Services
                     Console.Write($"\r[{p.Stage}] {p.ProgressPercent:F1}% - {p.CurrentFile}");
                 });
 
-                var result = await packService.PackAsync(config, progress, CancellationToken.None);
+                using var cts = new CancellationTokenSource();
+                Console.CancelKeyPress += (s, e) =>
+                {
+                    e.Cancel = true;
+                    cts.Cancel();
+                    Console.WriteLine("\nCancelling...");
+                };
 
-                Console.WriteLine();
-                if (result.IsSuccess)
+                try
                 {
-                    Console.WriteLine($"Success: {result.OutputPath} ({result.OutputFileSize} bytes)");
-                    context.ExitCode = 0;
+                    var result = await packService.PackAsync(config, progress, cts.Token);
+
+                    Console.WriteLine();
+                    if (result.IsSuccess)
+                    {
+                        Console.WriteLine($"Success: {result.OutputPath} ({result.OutputFileSize} bytes)");
+                        context.ExitCode = 0;
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine($"Error: {result.ErrorMessage}");
+                        context.ExitCode = 1;
+                    }
                 }
-                else
+                catch (OperationCanceledException)
                 {
-                    Console.Error.WriteLine($"Error: {result.ErrorMessage}");
-                    context.ExitCode = 1;
+                    Console.WriteLine("\nCancelled.");
+                    context.ExitCode = 2;
                 }
             });
 

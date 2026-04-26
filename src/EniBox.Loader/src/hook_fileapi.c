@@ -12,6 +12,7 @@ static GetFileSizeEx_t g_orig_GetFileSizeEx = NULL;
 static GetFileAttributesA_t g_orig_GetFileAttributesA = NULL;
 static GetFileAttributesW_t g_orig_GetFileAttributesW = NULL;
 static SetFilePointer_t g_orig_SetFilePointer = NULL;
+static SetFilePointerEx_t g_orig_SetFilePointerEx = NULL;
 
 HANDLE WINAPI Hook_CreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode,
     LPSECURITY_ATTRIBUTES lpSA, DWORD dwCreation, DWORD dwFlags, HANDLE hTemplate) {
@@ -142,6 +143,44 @@ DWORD WINAPI Hook_SetFilePointer(HANDLE hFile, LONG lDistanceToMove,
     return g_orig_SetFilePointer(hFile, lDistanceToMove, lpDistanceToMoveHigh, dwMoveMethod);
 }
 
+BOOL WINAPI Hook_SetFilePointerEx(HANDLE hFile, LARGE_INTEGER liDistanceToMove,
+    PLARGE_INTEGER lpNewFilePointer, DWORD dwMoveMethod) {
+    /* Route 64-bit file seek operations for virtual handles to VFS */
+    if (VFS_IsVirtualHandle(hFile)) {
+        VFS_FILE_HANDLE* h = VFS_HandleFromOsHandle(hFile);
+        if (h) {
+            uint32_t file_size = VFS_GetFileSize(h);
+            int64_t offset = liDistanceToMove.QuadPart;
+            uint32_t new_pos;
+
+            switch (dwMoveMethod) {
+            case FILE_BEGIN:
+                new_pos = (offset < 0) ? 0 : (uint32_t)offset;
+                break;
+            case FILE_CURRENT:
+                new_pos = (uint32_t)((int64_t)h->current_pos + offset);
+                break;
+            case FILE_END:
+                new_pos = (uint32_t)((int64_t)file_size + offset);
+                break;
+            default:
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+
+            /* Clamp to file size */
+            if (new_pos > file_size) new_pos = file_size;
+            h->current_pos = new_pos;
+
+            if (lpNewFilePointer) lpNewFilePointer->QuadPart = (LONGLONG)new_pos;
+            return TRUE;
+        }
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+    return g_orig_SetFilePointerEx(hFile, liDistanceToMove, lpNewFilePointer, dwMoveMethod);
+}
+
 int32_t HookFile_Install(void) {
     if (MH_CreateHook(&CreateFileW, &Hook_CreateFileW, (LPVOID*)&g_orig_CreateFileW) != MH_OK) return -1;
     if (MH_CreateHook(&CreateFileA, &Hook_CreateFileA, (LPVOID*)&g_orig_CreateFileA) != MH_OK) return -2;
@@ -153,5 +192,6 @@ int32_t HookFile_Install(void) {
     if (MH_CreateHook(&WriteFile, &Hook_WriteFile, (LPVOID*)&g_orig_WriteFile) != MH_OK) return -8;
     /* CloseHandle is hooked in hook_filemapping.c - do not hook here */
     if (MH_CreateHook(&SetFilePointer, &Hook_SetFilePointer, (LPVOID*)&g_orig_SetFilePointer) != MH_OK) return -10;
+    if (MH_CreateHook(&SetFilePointerEx, &Hook_SetFilePointerEx, (LPVOID*)&g_orig_SetFilePointerEx) != MH_OK) return -11;
     return 0;
 }

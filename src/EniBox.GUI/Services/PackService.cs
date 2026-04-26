@@ -41,7 +41,7 @@ namespace EniBox.GUI.Services
                 // Stage 2: Parse source PE
                 ReportProgress(progressCallback, PackStage.CollectingFiles, 0, config.Files.Count, "Parsing source EXE...");
 
-                var peInfo = ParsePeInfo(config.SourceExePath);
+                var peInfo = GetPeInfo(config.SourceExePath);
                 if (peInfo == null)
                     return new PackResult { IsSuccess = false, ErrorMessage = "Failed to parse source EXE PE structure.", ErrorCode = PackErrorCode.InvalidPe };
 
@@ -146,105 +146,24 @@ namespace EniBox.GUI.Services
             return null;
         }
 
-        private static PeInfo? ParsePeInfo(string exePath)
+        /// <summary>
+        /// Gets PE info using PeTool DLL (single source of truth, avoids duplicate parsing logic).
+        /// </summary>
+        private static PeInfo? GetPeInfo(string exePath)
         {
             try
             {
-                using var stream = File.OpenRead(exePath);
-                using var reader = new BinaryReader(stream);
-
-                // Check DOS signature
-                if (reader.ReadUInt16() != 0x5A4D) // 'MZ'
+                int result = PeToolInterop.Open(exePath, out IntPtr ctx);
+                if (result != 0 || ctx == IntPtr.Zero)
                     return null;
-
-                // Read e_lfanew
-                stream.Position = 0x3C;
-                var peOffset = reader.ReadInt32();
-
-                // Check PE signature
-                stream.Position = peOffset;
-                if (reader.ReadUInt32() != 0x00004550) // 'PE\0\0'
-                    return null;
-
-                // Read IMAGE_FILE_HEADER
-                var machine = reader.ReadUInt16();
-                var numberOfSections = reader.ReadUInt16();
-                reader.ReadUInt32(); // TimeDateStamp
-                reader.ReadUInt32(); // PointerToSymbolTable
-                reader.ReadUInt32(); // NumberOfSymbols
-                var sizeOfOptionalHeader = reader.ReadUInt16();
-                reader.ReadUInt16(); // Characteristics
-
-                // Read optional header
-                var optionalHeaderOffset = stream.Position;
-                var magic = reader.ReadUInt16();
-                var is64Bit = magic == 0x20B; // PE32+
-
-                uint entryPointRva;
-                uint sizeOfImage;
-                uint sizeOfHeaders;
-
-                if (is64Bit)
+                try
                 {
-                    reader.ReadByte();  // MajorLinkerVersion
-                    reader.ReadByte();  // MinorLinkerVersion
-                    reader.ReadUInt32(); // SizeOfCode
-                    reader.ReadUInt32(); // SizeOfInitializedData
-                    reader.ReadUInt32(); // SizeOfUninitializedData
-                    entryPointRva = reader.ReadUInt32();
-                    reader.ReadUInt32(); // BaseOfCode
-                    reader.ReadUInt64(); // ImageBase
-                    reader.ReadUInt32(); // SectionAlignment
-                    var fileAlignment = reader.ReadUInt32();
-                    reader.ReadUInt16(); // MajorOperatingSystemVersion
-                    reader.ReadUInt16(); // MinorOperatingSystemVersion
-                    reader.ReadUInt16(); // MajorImageVersion
-                    reader.ReadUInt16(); // MinorImageVersion
-                    reader.ReadUInt16(); // MajorSubsystemVersion
-                    reader.ReadUInt16(); // MinorSubsystemVersion
-                    reader.ReadUInt32(); // Win32VersionValue
-                    sizeOfImage = reader.ReadUInt32();
-                    sizeOfHeaders = reader.ReadUInt32();
+                    return PeToolInterop.GetInfo(ctx);
                 }
-                else
+                finally
                 {
-                    reader.ReadByte();  // MajorLinkerVersion
-                    reader.ReadByte();  // MinorLinkerVersion
-                    reader.ReadUInt32(); // SizeOfCode
-                    reader.ReadUInt32(); // SizeOfInitializedData
-                    reader.ReadUInt32(); // SizeOfUninitializedData
-                    entryPointRva = reader.ReadUInt32();
-                    reader.ReadUInt32(); // BaseOfCode
-                    reader.ReadUInt32(); // BaseOfData
-                    reader.ReadUInt32(); // ImageBase
-                    reader.ReadUInt32(); // SectionAlignment
-                    var fileAlignment = reader.ReadUInt32();
-                    reader.ReadUInt16(); // MajorOperatingSystemVersion
-                    reader.ReadUInt16(); // MinorOperatingSystemVersion
-                    reader.ReadUInt16(); // MajorImageVersion
-                    reader.ReadUInt16(); // MinorImageVersion
-                    reader.ReadUInt16(); // MajorSubsystemVersion
-                    reader.ReadUInt16(); // MinorSubsystemVersion
-                    reader.ReadUInt32(); // Win32VersionValue
-                    sizeOfImage = reader.ReadUInt32();
-                    sizeOfHeaders = reader.ReadUInt32();
+                    PeToolInterop.Close(ctx);
                 }
-
-                var arch = machine switch
-                {
-                    0x014C => PeArchitecture.X86,
-                    0x8664 => PeArchitecture.X64,
-                    _ => PeArchitecture.Unknown
-                };
-
-                return new PeInfo
-                {
-                    Architecture = arch,
-                    EntryPointRva = entryPointRva,
-                    NumberOfSections = numberOfSections,
-                    SizeOfImage = sizeOfImage,
-                    SizeOfHeaders = sizeOfHeaders
-                };
             }
             catch
             {
