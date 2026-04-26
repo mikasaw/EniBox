@@ -279,11 +279,17 @@ namespace EniBox.GUI.Services
             using var ms = new MemoryStream();
             using var writer = new BinaryWriter(ms);
 
+            // Write VFS size (4 bytes) - Loader uses this to find VFS data boundary
+            var vfsMetadata = vfsResult.Metadata;
+            var vfsDataRegion = vfsResult.DataRegion;
+            uint vfsTotalSize = (uint)(vfsMetadata.Length + vfsDataRegion.Length);
+            writer.Write(vfsTotalSize);
+
             // Write VFS metadata
-            writer.Write(vfsResult.Metadata);
+            writer.Write(vfsMetadata);
 
             // Write VFS data region
-            writer.Write(vfsResult.DataRegion);
+            writer.Write(vfsDataRegion);
 
             // Write Loader DLL
             writer.Write(loaderData);

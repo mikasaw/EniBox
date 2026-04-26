@@ -13,9 +13,8 @@
 ### ~~3. 端到端真实 PE 打包测试~~ ✅ 已完成
 - **完成内容**: 添加 `RealPeToolE2ETests`（5 个测试）使用 fc.exe 作为源，验证完整 Open→AddSection→ProcessTLS→MergeImports→Save 流程，输出 EXE 包含 `.enibox` 节且 PE 结构有效。同时修复了 `MergeImports` 的 GCHandle pinning 问题（改用 `Marshal.AllocHGlobal` + `StructureToPtr`）
 
-### 4. Loader DLL 嵌入到输出 EXE
-- **问题**: 当前 `CombineSectionData` 将 Loader DLL 字节写入 `.enibox` 节数据区，但 Loader 的 `DllMain` 是通过导入表触发的——导入表引用的是外部 `EniBox.Loader.dll` 文件，而非节内嵌入的副本
-- **需要**: 两种方案选一：(A) 运行时从 `.enibox` 节提取 Loader DLL 写入临时文件再 LoadLibrary，或 (B) 修改导入表合并逻辑使 Loader 通过入口点存根加载而非导入表
+### ~~4. Loader DLL 嵌入到输出 EXE~~ ✅ 已完成
+- **完成内容**: 实现方案 A——运行时从 `.enibox` 节提取 Loader DLL 到临时文件。新增 `vfs_total_size:4` 字段到节布局，Loader DllMain 据此正确分割 VFS 数据和嵌入的 Loader DLL 字节。`ExtractEmbeddedLoader` 将 DLL 写入 `%TEMP%\EniBox.Loader.<pid>.dll`，供子进程注入使用。`CleanupExtractedLoader` 在 DLL_PROCESS_DETACH 时清理临时文件（含 MOVEFILE_DELAY_UNTIL_REBOOT 兜底）。修复了之前 VFS 初始化误将 Loader DLL 字节当作 VFS 数据的 bug
 
 ### 5. VFS 句柄伪文件系统完善
 - **问题**: `VFS_HandleAlloc` 返回的伪句柄需要确保不与真实 OS 句柄冲突，且 `Hook_ReadFile`/`Hook_GetFileSize` 等需要正确路由伪句柄到 VFS 读取

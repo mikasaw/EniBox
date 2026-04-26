@@ -584,28 +584,31 @@ int32_t PE_ModSave(PE_CONTEXT* ctx, const wchar_t* output_path)
  * entry point. The jump target is stored as an absolute VA placeholder that
  * the Loader DLL patches at runtime (ImageBase + original_ep_rva).
  *
- * Section data layout:
+ * Section data layout (after CombineSectionData + stub prepend):
  *   [0..stub_size-1]            Entry point stub machine code
  *   [stub_size+0..stub_size+3]  Original entry point RVA (uint32, for Loader to read)
  *   [stub_size+4..stub_size+7]  .enibox section RVA (uint32, for Loader to read)
- *   [stub_size+8..]             VFS metadata + data + Loader DLL
+ *   [stub_size+8..stub_size+11] VFS total size (uint32, for Loader to split VFS/Loader)
+ *   [stub_size+12..]            VFS metadata + data + Loader DLL bytes
  *
- * x64 stub (16 bytes):
+ * x64 stub (22 bytes):
  *   sub rsp, 0x28           ; 4 bytes - shadow space
  *   add rsp, 0x28           ; 4 bytes - restore
  *   jmp [rip+0]             ; 6 bytes - indirect jump via following 8-byte address
  *   <8-byte VA placeholder> ; will be patched by Loader to ImageBase + original_ep_rva
  *
- * x86 stub (10 bytes):
- *   jmp [addr]              ; 6 bytes - indirect jump via following 4-byte address
- *   <4-byte VA placeholder> ; will be patched by Loader to ImageBase + original_ep_rva
+ * x86 stub (6 bytes):
+ *   push <imm32>            ; 5 bytes - push VA placeholder
+ *   ret                     ; 1 byte  - jump to pushed address
  *
  * The Loader DLL's DllMain:
- *   1. Reads original_ep_rva from section_base + stub_size
- *   2. Reads section_rva from section_base + stub_size + 4
- *   3. Computes ImageBase = GetModuleHandle(NULL) - section_rva (approx)
- *   4. Writes (ImageBase + original_ep_rva) to the VA placeholder
- *   5. Initializes VFS and hooks
+ *   1. Reads original_ep_rva from section_base + metadata_offset
+ *   2. Reads section_rva from section_base + metadata_offset + 4
+ *   3. Reads vfs_total_size from section_base + metadata_offset + 8
+ *   4. Computes ImageBase = section_base - section_rva
+ *   5. Writes (ImageBase + original_ep_rva) to the VA placeholder
+ *   6. Initializes VFS from section_base + vfs_data_offset for vfs_total_size bytes
+ *   7. Extracts Loader DLL from section_base + vfs_data_offset + vfs_total_size
  */
 uint32_t PE_ModBuildEntryPointStub(PE_CONTEXT* ctx,
                                     uint32_t original_entry_rva,

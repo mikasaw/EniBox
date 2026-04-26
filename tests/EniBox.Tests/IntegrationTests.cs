@@ -874,17 +874,25 @@ namespace EniBox.Tests
         {
             // x64 stub: sub rsp,0x28 (4) + add rsp,0x28 (4) + jmp [rip+0] (6) = 14 bytes
             const int STUB_CODE_SIZE = 14;
-            const int METADATA_SIZE = 8;        // original_ep_rva (4) + section_rva (4)
+            const int VA_PLACEHOLDER_SIZE = 8;   // 8-byte absolute VA
+            const int METADATA_SIZE = 8;         // original_ep_rva (4) + section_rva (4)
+            const int VFS_SIZE_FIELD = 4;        // vfs_total_size (4)
 
-            // Total layout: [stub:14][VA_placeholder:8][metadata:8][VFS data...]
-            const int TOTAL_HEADER = STUB_CODE_SIZE + 8 + METADATA_SIZE;
-            Assert.Equal(30, TOTAL_HEADER);
+            // Total layout: [stub:14][VA_placeholder:8][metadata:8][vfs_size:4][VFS data...][Loader DLL...]
+            const int TOTAL_HEADER = STUB_CODE_SIZE + VA_PLACEHOLDER_SIZE + METADATA_SIZE + VFS_SIZE_FIELD;
+            Assert.Equal(34, TOTAL_HEADER);
 
             // VA placeholder offset (where Loader patches the jump target)
             Assert.Equal(14, STUB_CODE_SIZE);
 
             // Metadata offset (where Loader reads original_ep_rva and section_rva)
-            Assert.Equal(22, STUB_CODE_SIZE + 8);
+            Assert.Equal(22, STUB_CODE_SIZE + VA_PLACEHOLDER_SIZE);
+
+            // VFS size field offset (where Loader reads vfs_total_size)
+            Assert.Equal(30, STUB_CODE_SIZE + VA_PLACEHOLDER_SIZE + METADATA_SIZE);
+
+            // VFS data starts after all header fields
+            Assert.Equal(34, STUB_CODE_SIZE + VA_PLACEHOLDER_SIZE + METADATA_SIZE + VFS_SIZE_FIELD);
         }
 
         [Fact]
@@ -894,16 +902,23 @@ namespace EniBox.Tests
             const int STUB_CODE_SIZE = 6;
             const int VA_PLACEHOLDER_OFFSET = 1;  // inside push instruction (after 0x68 opcode)
             const int METADATA_SIZE = 8;          // original_ep_rva (4) + section_rva (4)
+            const int VFS_SIZE_FIELD = 4;         // vfs_total_size (4)
 
-            // Total layout: [stub:6][metadata:8][VFS data...]
-            const int TOTAL_HEADER = STUB_CODE_SIZE + METADATA_SIZE;
-            Assert.Equal(14, TOTAL_HEADER);
+            // Total layout: [stub:6][metadata:8][vfs_size:4][VFS data...][Loader DLL...]
+            const int TOTAL_HEADER = STUB_CODE_SIZE + METADATA_SIZE + VFS_SIZE_FIELD;
+            Assert.Equal(18, TOTAL_HEADER);
 
             // VA placeholder is inside the push instruction at offset 1
             Assert.Equal(1, VA_PLACEHOLDER_OFFSET);
 
             // Metadata offset (where Loader reads original_ep_rva and section_rva)
             Assert.Equal(6, STUB_CODE_SIZE);
+
+            // VFS size field offset
+            Assert.Equal(14, STUB_CODE_SIZE + METADATA_SIZE);
+
+            // VFS data starts after all header fields
+            Assert.Equal(18, STUB_CODE_SIZE + METADATA_SIZE + VFS_SIZE_FIELD);
         }
 
         [Fact]
