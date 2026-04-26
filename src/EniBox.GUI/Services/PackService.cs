@@ -34,7 +34,7 @@ namespace EniBox.GUI.Services
 
                 var validationError = ValidateInput(config);
                 if (validationError != null)
-                    return new PackResult { IsSuccess = false, ErrorMessage = validationError };
+                    return new PackResult { IsSuccess = false, ErrorMessage = validationError, ErrorCode = PackErrorCode.ValidationFailed };
 
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -43,7 +43,7 @@ namespace EniBox.GUI.Services
 
                 var peInfo = ParsePeInfo(config.SourceExePath);
                 if (peInfo == null)
-                    return new PackResult { IsSuccess = false, ErrorMessage = "Failed to parse source EXE PE structure." };
+                    return new PackResult { IsSuccess = false, ErrorMessage = "Failed to parse source EXE PE structure.", ErrorCode = PackErrorCode.InvalidPe };
 
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -69,7 +69,7 @@ namespace EniBox.GUI.Services
                 // Select Loader DLL based on architecture
                 var loaderData = SelectLoaderDll(peInfo.Architecture);
                 if (loaderData == null)
-                    return new PackResult { IsSuccess = false, ErrorMessage = $"Unsupported architecture: {peInfo.Architecture}. Only x86 and x64 are supported." };
+                    return new PackResult { IsSuccess = false, ErrorMessage = $"Unsupported architecture: {peInfo.Architecture}. Only x86 and x64 are supported.", ErrorCode = PackErrorCode.UnsupportedArch };
 
                 // Combine VFS data + Loader DLL into section data
                 // (PeTool's stub generator prepends entry point stub + metadata)
@@ -78,7 +78,10 @@ namespace EniBox.GUI.Services
                 // Apply PE modifications via PeTool DLL
                 var peError = ApplyPeModifications(config.SourceExePath, config.OutputPath, sectionData);
                 if (peError != null)
-                    return new PackResult { IsSuccess = false, ErrorMessage = peError };
+                {
+                    var err = peError.Value;
+                    return new PackResult { IsSuccess = false, ErrorMessage = err.ErrorMessage!, ErrorCode = err.ErrorCode };
+                }
 
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -98,7 +101,7 @@ namespace EniBox.GUI.Services
             catch (OperationCanceledException)
             {
                 CleanupTempFile(tempOutputPath);
-                return new PackResult { IsSuccess = false, ErrorMessage = "Operation cancelled." };
+                return new PackResult { IsSuccess = false, ErrorMessage = "Operation cancelled.", ErrorCode = PackErrorCode.OperationCancelled };
             }
             catch (PackException ex)
             {
@@ -108,7 +111,7 @@ namespace EniBox.GUI.Services
             catch (Exception ex)
             {
                 CleanupTempFile(tempOutputPath);
-                return new PackResult { IsSuccess = false, ErrorMessage = $"Unexpected error: {ex.Message}" };
+                return new PackResult { IsSuccess = false, ErrorMessage = $"Unexpected error: {ex.Message}", ErrorCode = PackErrorCode.UnexpectedError };
             }
         }
 
@@ -288,7 +291,7 @@ namespace EniBox.GUI.Services
             return ms.ToArray();
         }
 
-        private static string? ApplyPeModifications(string sourcePath, string outputPath, byte[] sectionData)
+        private static (string? ErrorMessage, int ErrorCode)? ApplyPeModifications(string sourcePath, string outputPath, byte[] sectionData)
         {
             IntPtr ctx = IntPtr.Zero;
             try
@@ -296,38 +299,38 @@ namespace EniBox.GUI.Services
                 // Open the source PE file
                 int result = PeToolInterop.Open(sourcePath, out ctx);
                 if (result != 0 || ctx == IntPtr.Zero)
-                    return $"Failed to open PE file (error {result}).";
+                    return ($"Failed to open PE file (error {result}).", PackErrorCode.InvalidPe);
 
                 // Add the .enibox section with VFS + Loader data
                 const uint SECTION_CHARACTERISTICS = 0xC0000040;
                 // IMAGE_SCN_CNT_CODE | IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE
                 result = PeToolInterop.AddSection(ctx, ".enibox", sectionData, SECTION_CHARACTERISTICS);
                 if (result != 0)
-                    return $"Failed to add .enibox section (error {result}).";
+                    return ($"Failed to add .enibox section (error {result}).", PackErrorCode.SectionFull);
 
                 // Process TLS callbacks to ensure Loader initializes before TLS
                 result = PeToolInterop.ProcessTLS(ctx);
                 if (result != 0)
-                    return $"Failed to process TLS callbacks (error {result}).";
+                    return ($"Failed to process TLS callbacks (error {result}).", PackErrorCode.ImportMergeFailed);
 
                 // Merge Loader DLL into import table so it loads before entry point
                 result = PeToolInterop.MergeImports(ctx, IntPtr.Zero, 0);
                 if (result != 0)
-                    return $"Failed to merge imports (error {result}).";
+                    return ($"Failed to merge imports (error {result}).", PackErrorCode.ImportMergeFailed);
 
                 result = PeToolInterop.Save(ctx, outputPath);
                 if (result != 0)
-                    return $"Failed to save modified PE (error {result}).";
+                    return ($"Failed to save modified PE (error {result}).", PackErrorCode.WriteFailed);
 
                 return null;
             }
             catch (DllNotFoundException ex)
             {
-                return $"PeTool DLL not found: {ex.Message}. Ensure EniBox.PeTool.dll is in the application directory.";
+                return ($"PeTool DLL not found: {ex.Message}. Ensure EniBox.PeTool.dll is in the application directory.", PackErrorCode.LoaderNotFound);
             }
             catch (Exception ex)
             {
-                return $"PE modification failed: {ex.Message}";
+                return ($"PE modification failed: {ex.Message}", PackErrorCode.UnexpectedError);
             }
             finally
             {

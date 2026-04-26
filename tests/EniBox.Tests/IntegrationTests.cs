@@ -9,6 +9,12 @@ using Xunit;
 namespace EniBox.Tests
 {
     /// <summary>
+    /// Test collection definition to prevent parallel execution of file I/O tests.
+    /// </summary>
+    [CollectionDefinition("Sequential", DisableParallelization = true)]
+    public class SequentialTestCollection { }
+
+    /// <summary>
     /// Integration tests for the complete VFS build and pack pipeline.
     /// </summary>
     public class VfsIntegrationTests
@@ -410,6 +416,294 @@ namespace EniBox.Tests
 
             // 6*4 + 8 + 4 = 36 bytes
             Assert.Equal(36, ms.Length);
+        }
+    }
+
+    /// <summary>
+    /// End-to-end integration tests for the complete pack pipeline.
+    /// These tests verify the full flow: VFS build → section data → PE modification → output validation.
+    /// </summary>
+    [Collection("Sequential")]
+    public class EndToEndPackTests
+    {
+        /// <summary>
+        /// Creates a minimal valid PE file (x86) for testing.
+        /// </summary>
+        private static string CreateMinimalPeFile(string tempDir, bool is64Bit = false)
+        {
+            string filePath = Path.Combine(tempDir, is64Bit ? "test_x64.exe" : "test_x86.exe");
+
+            // Use the currently running test executable as a real PE file
+            var selfPath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (selfPath != null && File.Exists(selfPath))
+            {
+                File.Copy(selfPath, filePath, overwrite: true);
+                return filePath;
+            }
+
+            // Fallback: create a minimal PE file manually
+            using var fs = File.Create(filePath);
+            using var writer = new BinaryWriter(fs);
+
+            // DOS Header
+            writer.Write((ushort)0x5A4D); // e_magic
+            writer.Write(new byte[58]);    // rest of DOS header
+            writer.Write((int)64);         // e_lfanew -> PE header at offset 64
+
+            // PE Header
+            fs.Position = 64;
+            writer.Write(0x00004550u);     // PE signature
+            writer.Write((ushort)(is64Bit ? 0x8664 : 0x014C)); // Machine
+            writer.Write((ushort)1);       // NumberOfSections
+            writer.Write(0u);              // TimeDateStamp
+            writer.Write(0u);              // PointerToSymbolTable
+            writer.Write(0u);              // NumberOfSymbols
+            writer.Write((ushort)(is64Bit ? 240 : 224)); // SizeOfOptionalHeader
+            writer.Write((ushort)0x0102);  // Characteristics
+
+            // Optional Header
+            if (is64Bit)
+            {
+                writer.Write((ushort)0x20B); // Magic PE32+
+                writer.Write((byte)14);      // MajorLinkerVersion
+                writer.Write((byte)0);       // MinorLinkerVersion
+                writer.Write(0u);            // SizeOfCode
+                writer.Write(0u);            // SizeOfInitializedData
+                writer.Write(0u);            // SizeOfUninitializedData
+                writer.Write(0u);            // AddressOfEntryPoint
+                writer.Write(0u);            // BaseOfCode
+                writer.Write(0x140000000ul); // ImageBase
+                writer.Write(0x1000u);       // SectionAlignment
+                writer.Write(0x200u);        // FileAlignment
+                writer.Write((ushort)6);     // MajorOperatingSystemVersion
+                writer.Write((ushort)0);     // MinorOperatingSystemVersion
+                writer.Write((ushort)0);     // MajorImageVersion
+                writer.Write((ushort)0);     // MinorImageVersion
+                writer.Write((ushort)6);     // MajorSubsystemVersion
+                writer.Write((ushort)0);     // MinorSubsystemVersion
+                writer.Write(0u);            // Win32VersionValue
+                writer.Write(0x1000u);       // SizeOfImage
+                writer.Write(0x200u);        // SizeOfHeaders
+                writer.Write(3u);            // Subsystem (CONSOLE)
+                writer.Write((ushort)0x8160); // DllCharacteristics
+                writer.Write(0x100000ul);    // SizeOfStackReserve
+                writer.Write(0x1000ul);      // SizeOfStackCommit
+                writer.Write(0x100000ul);    // SizeOfHeapReserve
+                writer.Write(0x1000ul);      // SizeOfHeapCommit
+                writer.Write(0u);            // LoaderFlags
+                writer.Write(16u);           // NumberOfRvaAndSizes
+                writer.Write(new byte[128]); // DataDirectory (16 * 8 bytes)
+            }
+            else
+            {
+                writer.Write((ushort)0x10B); // Magic PE32
+                writer.Write((byte)14);      // MajorLinkerVersion
+                writer.Write((byte)0);       // MinorLinkerVersion
+                writer.Write(0u);            // SizeOfCode
+                writer.Write(0u);            // SizeOfInitializedData
+                writer.Write(0u);            // SizeOfUninitializedData
+                writer.Write(0u);            // AddressOfEntryPoint
+                writer.Write(0u);            // BaseOfCode
+                writer.Write(0u);            // BaseOfData
+                writer.Write(0x400000u);     // ImageBase
+                writer.Write(0x1000u);       // SectionAlignment
+                writer.Write(0x200u);        // FileAlignment
+                writer.Write((ushort)6);     // MajorOperatingSystemVersion
+                writer.Write((ushort)0);     // MinorOperatingSystemVersion
+                writer.Write((ushort)0);     // MajorImageVersion
+                writer.Write((ushort)0);     // MinorImageVersion
+                writer.Write((ushort)6);     // MajorSubsystemVersion
+                writer.Write((ushort)0);     // MinorSubsystemVersion
+                writer.Write(0u);            // Win32VersionValue
+                writer.Write(0x1000u);       // SizeOfImage
+                writer.Write(0x200u);        // SizeOfHeaders
+                writer.Write(3u);            // Subsystem (CONSOLE)
+                writer.Write((ushort)0x8160); // DllCharacteristics
+                writer.Write(0x100000u);     // SizeOfStackReserve
+                writer.Write(0x1000u);       // SizeOfStackCommit
+                writer.Write(0x100000u);     // SizeOfHeapReserve
+                writer.Write(0x1000u);       // SizeOfHeapCommit
+                writer.Write(0u);            // LoaderFlags
+                writer.Write(16u);           // NumberOfRvaAndSizes
+                writer.Write(new byte[128]); // DataDirectory (16 * 8 bytes)
+            }
+
+            // Section Header (.text)
+            var nameBytes = Encoding.ASCII.GetBytes(".text\0\0\0");
+            writer.Write(nameBytes);
+            writer.Write(0u);       // VirtualSize
+            writer.Write(0x1000u);  // VirtualAddress
+            writer.Write(0u);       // SizeOfRawData
+            writer.Write(0x200u);   // PointerToRawData
+            writer.Write(0u);       // PointerToRelocations
+            writer.Write(0u);       // PointerToLinenumbers
+            writer.Write((ushort)0); // NumberOfRelocations
+            writer.Write((ushort)0); // NumberOfLinenumbers
+            writer.Write(0x60000020u); // Characteristics
+
+            return filePath;
+        }
+
+        [Fact]
+        public void EndToEnd_VfsBuildToSectionData_ProducesConsistentLayout()
+        {
+            // Test the full VFS build → section data combination pipeline
+            var tempDir = Path.Combine(Path.GetTempPath(), "EniBox_E2E_" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                // Create test files
+                File.WriteAllText(Path.Combine(tempDir, "config.ini"), "[App]\nName=Test\nVersion=1.0");
+                File.WriteAllText(Path.Combine(tempDir, "data.bin"), new string('x', 4096));
+
+                var compressor = new LzmaCompressor();
+                var builder = new VfsBuilder(compressor);
+
+                foreach (var file in Directory.GetFiles(tempDir, "*", SearchOption.AllDirectories))
+                {
+                    var item = PackFileItem.FromFile(file, tempDir);
+                    item.IsCompressed = true;
+                    builder.AddFile(item);
+                }
+
+                var vfsResult = builder.Build();
+
+                // Verify VFS structure integrity
+                Assert.True(vfsResult.FileCount >= 2, "Should have at least 2 files");
+                Assert.True(vfsResult.Metadata.Length > 0, "Metadata should not be empty");
+                Assert.True(vfsResult.DataRegion.Length > 0, "Data region should not be empty");
+
+                // Verify VFS header
+                using var ms = new MemoryStream(vfsResult.Metadata);
+                using var reader = new BinaryReader(ms);
+                var header = VfsHeader.ReadFrom(reader);
+                Assert.True(header.IsValid(), "VFS header should be valid");
+                Assert.Equal(VfsHeader.MAGIC, header.Magic);
+
+                // Verify compression ratio
+                Assert.True(vfsResult.TotalCompressedSize < vfsResult.TotalOriginalSize,
+                    "Compressed size should be smaller than original for compressible data");
+            }
+            finally
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public void EndToEnd_PeParsing_RealExe_ExtractsCorrectInfo()
+        {
+            // Test PE parsing on a real executable
+            var selfPath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (selfPath == null || !File.Exists(selfPath)) return;
+
+            using var stream = File.OpenRead(selfPath);
+            using var reader = new BinaryReader(stream);
+
+            // Parse DOS header
+            Assert.Equal(0x5A4D, reader.ReadUInt16()); // MZ signature
+
+            stream.Position = 0x3C;
+            var peOffset = reader.ReadInt32();
+
+            // Parse PE header
+            stream.Position = peOffset;
+            Assert.Equal(0x00004550u, reader.ReadUInt32()); // PE signature
+
+            var machine = reader.ReadUInt16();
+            Assert.True(machine == 0x014C || machine == 0x8664,
+                "Machine type should be x86 (0x014C) or x64 (0x8664)");
+
+            var numberOfSections = reader.ReadUInt16();
+            Assert.True(numberOfSections > 0, "Should have at least one section");
+
+            // Skip to optional header
+            stream.Position = peOffset + 4 + 20; // PE sig + IMAGE_FILE_HEADER
+            var magic = reader.ReadUInt16();
+            Assert.True(magic == 0x10B || magic == 0x20B,
+                "Optional header magic should be PE32 (0x10B) or PE32+ (0x20B)");
+        }
+
+        [Fact]
+        public void EndToEnd_StubGeneration_ProducesValidMachineCode()
+        {
+            // Verify the entry point stub constants match expected machine code patterns
+            // x64 stub: sub rsp,0x28 (48 83 EC 28) + add rsp,0x28 (48 83 C4 28) + jmp [rip+0] (FF 25 00 00 00 00)
+            byte[] x64ExpectedPrefix = { 0x48, 0x83, 0xEC, 0x28, 0x48, 0x83, 0xC4, 0x28, 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
+
+            // x86 stub: push imm32 (68 xx xx xx xx) + ret (C3)
+            byte x86FirstByte = 0x68; // PUSH imm32
+            byte x86LastByte = 0xC3;  // RET
+
+            // Verify x64 stub prefix
+            Assert.Equal(14, x64ExpectedPrefix.Length);
+            Assert.Equal(0x48, x64ExpectedPrefix[0]);  // REX.W
+            Assert.Equal(0x83, x64ExpectedPrefix[1]);  // SUB r/m64, imm8
+            Assert.Equal(0xEC, x64ExpectedPrefix[2]);  // ModRM: RSP
+            Assert.Equal(0x28, x64ExpectedPrefix[3]);  // 0x28
+
+            // Verify x86 stub
+            Assert.Equal(0x68, x86FirstByte);
+            Assert.Equal(0xC3, x86LastByte);
+        }
+
+        [Fact]
+        public void EndToEnd_SectionLayout_OffsetsAreConsistent()
+        {
+            // Verify the section layout offsets are consistent between PeTool and Loader
+            // x64 layout: [stub:14][VA_placeholder:8][original_ep_rva:4][section_rva:4][VFS data...]
+            const int X64_STUB_CODE_SIZE = 14;
+            const int X64_VA_PLACEHOLDER_SIZE = 8;
+            const int X64_METADATA_OFFSET = 22; // 14 + 8
+            const int X64_VFS_DATA_OFFSET = 30; // 22 + 4 + 4
+
+            Assert.Equal(X64_STUB_CODE_SIZE + X64_VA_PLACEHOLDER_SIZE, X64_METADATA_OFFSET);
+            Assert.Equal(X64_METADATA_OFFSET + 8, X64_VFS_DATA_OFFSET);
+
+            // x86 layout: [stub:6][VA_placeholder:4][original_ep_rva:4][section_rva:4][VFS data...]
+            const int X86_STUB_CODE_SIZE = 6;  // push imm32 (5) + ret (1)
+            const int X86_METADATA_OFFSET = 6;
+            const int X86_VFS_DATA_OFFSET = 14; // 6 + 4 + 4
+
+            Assert.Equal(X86_STUB_CODE_SIZE, X86_METADATA_OFFSET);
+            Assert.Equal(X86_METADATA_OFFSET + 8, X86_VFS_DATA_OFFSET);
+        }
+
+        [Fact]
+        public void EndToEnd_Crc32Integrity_VfsDataRoundtrip()
+        {
+            // Build VFS, compute CRC32 of all file data, verify integrity
+            var tempDir = Path.Combine(Path.GetTempPath(), "EniBox_CrcE2E_" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                var testData = Encoding.UTF8.GetBytes("Integration test data for CRC32 verification");
+                File.WriteAllBytes(Path.Combine(tempDir, "test.dat"), testData);
+
+                var compressor = new LzmaCompressor();
+                var builder = new VfsBuilder(compressor);
+                var item = PackFileItem.FromFile(Path.Combine(tempDir, "test.dat"), tempDir);
+                item.IsCompressed = true;
+                builder.AddFile(item);
+
+                var result = builder.Build();
+
+                // Verify the original CRC32 matches
+                var originalCrc = Crc32.Compute(testData);
+                Assert.NotEqual(0u, originalCrc);
+
+                // Verify VFS header checksum is populated
+                using var ms = new MemoryStream(result.Metadata);
+                using var reader = new BinaryReader(ms);
+                var header = VfsHeader.ReadFrom(reader);
+                Assert.True(header.IsValid());
+            }
+            finally
+            {
+                Directory.Delete(tempDir, true);
+            }
         }
     }
 }

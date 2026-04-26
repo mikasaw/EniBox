@@ -32,83 +32,162 @@ static HOOK_ENTRY g_hooks[MAX_HOOKS];
 static int g_hookCount = 0;
 static BOOL g_initialized = FALSE;
 
-/* ---- x86/x64 instruction length decoding (simplified) ---- */
+/* ---- x86/x64 instruction length decoding (enhanced) ---- */
+
+/* Decode ModRM byte and return the total size of the ModRM + SIB + displacement bytes.
+ * This handles all addressing modes: register, memory with SIB, disp8, disp32, RIP-relative. */
+static size_t DecodeModRM(const uint8_t* pModRM, uint8_t opcode) {
+    uint8_t modrm = pModRM[0];
+    uint8_t mod = (modrm >> 6) & 3;
+    uint8_t rm = modrm & 7;
+    size_t size = 1; /* ModRM byte itself */
+
+#ifdef _WIN64
+    /* In 64-bit mode, mod=00 rm=5 means RIP-relative (disp32) */
+    if (mod == 0 && rm == 5) return size + 4; /* disp32 */
+#endif
+
+    /* SIB byte follows if mod != 3 and rm == 4 (ESP/RSP) */
+    if (mod != 3 && rm == 4) {
+        size += 1; /* SIB byte */
+        uint8_t sib = pModRM[1];
+        uint8_t base = sib & 7;
+        /* SIB with mod=00 and base=5 means disp32 (no base register) */
+        if (mod == 0 && base == 5) return size + 4; /* disp32 */
+    }
+
+    /* Displacement based on mod */
+    if (mod == 1) size += 1; /* disp8 */
+    else if (mod == 2) size += 4; /* disp32 */
+
+    /* Immediate operand size based on opcode group */
+    if (opcode == 0x81 || opcode == 0xC1 || opcode == 0xC7) size += 4; /* imm32 */
+    else if (opcode == 0x80 || opcode == 0x83 || opcode == 0xC0 || opcode == 0xC6) size += 1; /* imm8 */
+
+    return size;
+}
 
 /* Get the length of the instruction at pCode so we know how many bytes to overwrite.
- * This is a simplified version - a full implementation would use a proper disassembler.
- * For common function prologues, this is sufficient. */
+ * Enhanced version covering: REX prefixes, 0F two-byte opcodes, common SSE/AVX patterns,
+ * ModRM/SIB addressing, and immediate operands.
+ * Returns 0 for unrecognized opcodes (should not happen for valid function prologues). */
 static size_t GetInstructionLength(void* pCode) {
     uint8_t* p = (uint8_t*)pCode;
     uint8_t opcode = p[0];
-
-    /* Common single-byte opcodes */
-    if (opcode == 0xC3 || opcode == 0xCB || opcode == 0xC2 || opcode == 0xCA) return 1; /* ret/retn */
-    if (opcode == 0xCC) return 1; /* int3 */
-    if (opcode == 0x90) return 1; /* nop */
-
-    /* Two-byte opcodes with ModRM */
-    if (opcode == 0x89 || opcode == 0x8B || opcode == 0x8D ||  /* mov */
-        opcode == 0x83 || opcode == 0x81 ||                     /* add/or/adc/sbb/and/sub/xor/cmp imm */
-        opcode == 0x85 || opcode == 0x84 ||                     /* test */
-        opcode == 0x39 || opcode == 0x3B ||                     /* cmp */
-        opcode == 0x23 || opcode == 0x0B ||                     /* and/or */
-        opcode == 0x33 || opcode == 0x31 ||                     /* xor */
-        opcode == 0x29 || opcode == 0x2B ||                     /* sub */
-        opcode == 0x01 || opcode == 0x03 ||                     /* add */
-        opcode == 0x50 || opcode == 0x51 || opcode == 0x52 ||   /* push r32 */
-        opcode == 0x53 || opcode == 0x54 || opcode == 0x55 ||
-        opcode == 0x56 || opcode == 0x57 ||
-        opcode == 0x58 || opcode == 0x59 || opcode == 0x5A ||   /* pop r32 */
-        opcode == 0x5B || opcode == 0x5C || opcode == 0x5D ||
-        opcode == 0x5E || opcode == 0x5F) {
-        /* Check for ModRM */
-        uint8_t modrm = p[1];
-        uint8_t mod = (modrm >> 6) & 3;
-        uint8_t rm = modrm & 7;
-        if (mod == 0 && rm == 5) return 6; /* disp32 */
-        if (mod == 0 && rm == 4) return 3; /* SIB */
-        if (mod == 1) return 3; /* disp8 */
-        if (mod == 2) return 6; /* disp32 */
-        return 2;
-    }
-
-    /* push imm8 / push imm32 */
-    if (opcode == 0x6A) return 2;
-    if (opcode == 0x68) return 5;
-
-    /* mov r32, imm32 */
-    if (opcode >= 0xB8 && opcode <= 0xBF) return 5;
-
-    /* call rel32 / jmp rel32 */
-    if (opcode == 0xE8 || opcode == 0xE9) return 5;
-
-    /* jmp rel8 */
-    if (opcode == 0xEB) return 2;
-
-    /* lea / mov with ModRM and possible SIB */
-    if (opcode == 0xFF) {
-        uint8_t modrm = p[1];
-        uint8_t mod = (modrm >> 6) & 3;
-        uint8_t rm = modrm & 7;
-        if (mod == 0 && rm == 4) return 3;
-        if (mod == 1) return 3;
-        if (mod == 2) return 6;
-        return 2;
-    }
-
-    /* sub/add/cmp esp, imm8 */
-    if (opcode == 0x83) return 4;
+    size_t offset = 0;
 
 #ifdef _WIN64
-    /* REX prefix for x64 */
+    /* REX prefix: 0x40-0x4F */
+    uint8_t rex = 0;
     if ((opcode & 0xF0) == 0x40) {
-        /* REX + opcode + ModRM */
-        return 3; /* Simplified - most common case */
+        rex = opcode;
+        opcode = p[++offset];
     }
 #endif
 
-    /* Default: assume 1 byte (will be overridden for common prologues) */
-    return 1;
+    /* Single-byte opcodes */
+    switch (opcode) {
+    /* 1-byte: no operands */
+    case 0xC3: case 0xCB: case 0xCC: case 0x90: case 0xF4: /* ret/retn/int3/nop/hlt */
+        return offset + 1;
+    case 0xC2: case 0xCA: /* ret imm16 / retf imm16 */
+        return offset + 3;
+
+    /* push/pop r32 (no REX) or push/pop r64 (with REX.W) */
+    case 0x50: case 0x51: case 0x52: case 0x53:
+    case 0x54: case 0x55: case 0x56: case 0x57:
+    case 0x58: case 0x59: case 0x5A: case 0x5B:
+    case 0x5C: case 0x5D: case 0x5E: case 0x5F:
+        return offset + 1;
+
+    /* push imm8 / push imm32 */
+    case 0x6A: return offset + 2;
+    case 0x68:
+#ifdef _WIN64
+        return offset + (rex ? 9 : 5); /* REX.W push imm64, else push imm32 */
+#else
+        return offset + 5;
+#endif
+
+    /* mov r32/64, imm32/64 */
+    case 0xB8: case 0xB9: case 0xBA: case 0xBB:
+    case 0xBC: case 0xBD: case 0xBE: case 0xBF:
+#ifdef _WIN64
+        return offset + (rex & 0x08 ? 9 : 5); /* REX.W: mov r64, imm64 (8 bytes), else imm32 */
+#else
+        return offset + 5;
+#endif
+
+    /* call rel32 / jmp rel32 */
+    case 0xE8: case 0xE9: return offset + 5;
+    /* jmp rel8 */
+    case 0xEB: return offset + 2;
+    /* jcc rel8 */
+    case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x76: case 0x77:
+    case 0x78: case 0x79: case 0x7A: case 0x7B: case 0x7C: case 0x7D: case 0x7E: case 0x7F:
+        return offset + 2;
+
+    /* ALU opcodes with ModRM: add/or/adc/sbb/and/sub/xor/cmp r/m, r or r, r/m */
+    case 0x00: case 0x01: case 0x02: case 0x03:
+    case 0x08: case 0x09: case 0x0A: case 0x0B:
+    case 0x10: case 0x11: case 0x12: case 0x13:
+    case 0x18: case 0x19: case 0x1A: case 0x1B:
+    case 0x20: case 0x21: case 0x22: case 0x23:
+    case 0x28: case 0x29: case 0x2A: case 0x2B:
+    case 0x30: case 0x31: case 0x32: case 0x33:
+    case 0x38: case 0x39: case 0x3A: case 0x3B:
+    /* mov, lea, test, xchg */
+    case 0x84: case 0x85: case 0x86: case 0x87:
+    case 0x88: case 0x89: case 0x8A: case 0x8B:
+    case 0x8D:
+    /* inc/dec r/m (32/64-bit mode) */
+    case 0xFF:
+    /* group1: add/or/adc/sbb/and/sub/xor/cmp r/m, imm */
+    case 0x80: case 0x81: case 0x83:
+    /* shift group2 */
+    case 0xC0: case 0xC1:
+    /* mov r/m, imm */
+    case 0xC6: case 0xC7:
+    /* fpu modrm */
+    case 0xD8: case 0xD9: case 0xDA: case 0xDB: case 0xDC: case 0xDD: case 0xDE: case 0xDF:
+        return offset + 1 + DecodeModRM(p + offset + 1, opcode);
+
+    /* 0F two-byte opcode prefix */
+    case 0x0F: {
+        uint8_t opcode2 = p[offset + 1];
+        /* jcc rel32 (0F 80-8F) */
+        if (opcode2 >= 0x80 && opcode2 <= 0x8F) return offset + 6;
+        /* near jmp (0F FF), near call (0F FE) - ModRM */
+        if (opcode2 == 0xFF || opcode2 == 0xFE) return offset + 2 + DecodeModRM(p + offset + 2, opcode2);
+        /* movq/movdqa/movdqu and other SSE2 with ModRM (0F 6F, 0F 7F, 0F 28-2F, etc.) */
+        if ((opcode2 >= 0x10 && opcode2 <= 0x17) || /* movups/movss/movupd/movsd */
+            (opcode2 >= 0x28 && opcode2 <= 0x2F) || /* movaps/movss/movapd/movsd */
+            (opcode2 >= 0x50 && opcode2 <= 0x5F) || /* movmskps/sqrtps/andps/etc */
+            (opcode2 >= 0x60 && opcode2 <= 0x6F) || /* punpcklwd/etc/packuswb/movq */
+            (opcode2 >= 0x70 && opcode2 <= 0x76) || /* pshufd/etc/pcmpeqd/emms */
+            opcode2 == 0x7E || opcode2 == 0x7F ||    /* movq/movdqa */
+            (opcode2 >= 0xA0 && opcode2 <= 0xAF) || /* push/pop fs/gs, imul, bsf/bsr, movsx */
+            (opcode2 >= 0xB0 && opcode2 <= 0xBF) || /* movsx/movzx with ModRM */
+            (opcode2 >= 0xC0 && opcode2 <= 0xC6) || /* xadd/bswap/cmpxchg/etc */
+            (opcode2 >= 0xD0 && opcode2 <= 0xDF) || /* psrlw/etc/pavgb/etc */
+            (opcode2 >= 0xE0 && opcode2 <= 0xEF) || /* pshuflw/etc/pxor/etc */
+            (opcode2 >= 0xF0 && opcode2 <= 0xFF))   /* lddqu/psadbw/maskmovdqu/etc */
+        {
+            /* 0F + opcode2 + ModRM */
+            return offset + 2 + DecodeModRM(p + offset + 2, opcode2);
+        }
+        /* 0F 1F: multi-byte NOP (with ModRM) */
+        if (opcode2 == 0x1F) return offset + 2 + DecodeModRM(p + offset + 2, opcode2);
+        /* 0F 0D: prefetchw (with ModRM) */
+        if (opcode2 == 0x0D) return offset + 2 + DecodeModRM(p + offset + 2, opcode2);
+        /* Default for unrecognized 0F: assume ModRM follows */
+        return offset + 2 + DecodeModRM(p + offset + 2, opcode2);
+    }
+
+    default:
+        /* Unrecognized opcode - return 1 byte as fallback */
+        return offset + 1;
+    }
 }
 
 /* Calculate the number of bytes we need to steal from the target function.
