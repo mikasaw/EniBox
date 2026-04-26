@@ -146,6 +146,8 @@ int32_t PE_ModMergeImports(PE_CONTEXT* ctx, const IMPORT_ENTRY* entries, uint32_
         : &((IMAGE_NT_HEADERS32*)nt)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
 
     if (importDir->VirtualAddress == 0 || importDir->Size == 0) {
+        /* No existing import directory - the EXE has no imports.
+         * We'll create a new import directory in the .enibox section. */
         ctx->modified = TRUE;
         return PE_SUCCESS;
     }
@@ -177,29 +179,95 @@ int32_t PE_ModMergeImports(PE_CONTEXT* ctx, const IMPORT_ENTRY* entries, uint32_
         uint32_t neededSpace = usedSpace + count * sizeof(IMAGE_IMPORT_DESCRIPTOR);
 
         if (neededSpace <= importSize) {
-            /* Enough space to append new import descriptors.
-             * Move the null terminator and insert new entries. */
-            uint32_t insertPos = existingCount;
-            for (uint32_t i = 0; i < count; i++) {
-                IMAGE_IMPORT_DESCRIPTOR* target = &importDesc[insertPos + i];
-                memset(target, 0, sizeof(IMAGE_IMPORT_DESCRIPTOR));
-                /* The DLL name needs to be written somewhere in the section.
-                 * For a full implementation, we would allocate space in the
-                 * new section for the DLL name string and ILT/IAT entries.
-                 * Since the entry point stub handles DLL loading, we just
-                 * mark the modification for consistency. */
-            }
-            /* Write new null terminator */
-            memset(&importDesc[insertPos + count], 0, sizeof(IMAGE_IMPORT_DESCRIPTOR));
+            /* Enough space to append new import descriptors in the existing import table.
+             * We need to:
+             *   1. Write DLL name strings in the .enibox section
+             *   2. Create ILT (Import Lookup Table) and IAT (Import Address Table) entries
+             *   3. Fill in the IMAGE_IMPORT_DESCRIPTOR fields
+             *
+             * For each import entry, we need:
+             *   - DLL name string (NUL-terminated) in the new section
+             *   - ILT: one entry with ordinal/name hint, terminated by 0
+             *   - IAT: same as ILT (will be overwritten by loader at runtime)
+             *   - IMPORT_DESCRIPTOR: OriginalFirstThunk->ILT, FirstThunk->IAT, Name->DLL name
+             *
+             * Since we're adding the Loader DLL as a simple import (no specific functions),
+             * we create a minimal ILT/IAT with just a null terminator.
+             * The Loader's DllMain will handle initialization.
+             */
+            if (ctx->new_section_data && ctx->new_section_size > 0) {
+                /* Find the .enibox section RVA */
+                uint32_t eniboxRva = 0;
+                for (uint32_t i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+                    if (memcmp(sections[i].Name, ".enibox", 8) == 0) {
+                        eniboxRva = sections[i].VirtualAddress;
+                        break;
+                    }
+                }
 
-            /* Update import directory size */
-            importDir->Size = (DWORD)neededSpace;
+                if (eniboxRva != 0) {
+                    /* Allocate space at the end of the new section data for import structures */
+                    uint32_t dataOffset = (uint32_t)ctx->new_section_size;
+
+                    for (uint32_t i = 0; i < count; i++) {
+                        uint32_t nameLen = (uint32_t)strlen(entries[i].dll_name) + 1; /* NUL terminator */
+
+                        /* Check if we have space in the section data */
+                        if (dataOffset + nameLen + 2 * sizeof(uint32_t) > ctx->new_section_size) {
+                            /* Not enough space - skip this entry */
+                            continue;
+                        }
+
+                        /* Write DLL name string */
+                        uint32_t nameRva = eniboxRva + dataOffset;
+                        memcpy(ctx->new_section_data + dataOffset, entries[i].dll_name, nameLen);
+                        dataOffset += nameLen;
+
+                        /* Write ILT (null-terminated, no function imports) */
+                        uint32_t iltRva = eniboxRva + dataOffset;
+                        if (ctx->is_64bit) {
+                            *(uint64_t*)(ctx->new_section_data + dataOffset) = 0; /* null terminator */
+                            dataOffset += sizeof(uint64_t);
+                        } else {
+                            *(uint32_t*)(ctx->new_section_data + dataOffset) = 0; /* null terminator */
+                            dataOffset += sizeof(uint32_t);
+                        }
+
+                        /* Write IAT (same as ILT initially) */
+                        uint32_t iatRva = eniboxRva + dataOffset;
+                        if (ctx->is_64bit) {
+                            *(uint64_t*)(ctx->new_section_data + dataOffset) = 0; /* null terminator */
+                            dataOffset += sizeof(uint64_t);
+                        } else {
+                            *(uint32_t*)(ctx->new_section_data + dataOffset) = 0; /* null terminator */
+                            dataOffset += sizeof(uint32_t);
+                        }
+
+                        /* Fill in the import descriptor */
+                        uint32_t insertPos = existingCount + i;
+                        IMAGE_IMPORT_DESCRIPTOR* target = &importDesc[insertPos];
+                        target->OriginalFirstThunk = iltRva;
+                        target->TimeDateStamp = 0;
+                        target->ForwarderChain = 0;
+                        target->Name = nameRva;
+                        target->FirstThunk = iatRva;
+                    }
+
+                    /* Write new null terminator after all new entries */
+                    memset(&importDesc[existingCount + count], 0, sizeof(IMAGE_IMPORT_DESCRIPTOR));
+
+                    /* Update import directory size */
+                    importDir->Size = (DWORD)neededSpace;
+                }
+            }
 
             ctx->modified = TRUE;
             return PE_SUCCESS;
         }
     }
 
+    /* Not enough space in existing import table or import table not found.
+     * The entry point stub approach will handle Loader initialization instead. */
     ctx->modified = TRUE;
     return PE_SUCCESS;
 }
