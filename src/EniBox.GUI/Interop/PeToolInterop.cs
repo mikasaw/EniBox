@@ -96,15 +96,29 @@ namespace EniBox.GUI.Interop
             int count = entries.Length;
             if (count == 0) return 0;
 
-            // Pin the managed array in memory and pass its address to the native function
-            var handle = GCHandle.Alloc(entries, GCHandleType.Pinned);
+            // ImportEntry contains a string field (reference type), so we cannot
+            // pin the managed array with GCHandle. Instead, allocate unmanaged memory
+            // and marshal each entry individually.
+            int structSize = Marshal.SizeOf<ImportEntry>();
+            IntPtr buffer = Marshal.AllocHGlobal(structSize * count);
             try
             {
-                return PE_MergeImports(ctx, handle.AddrOfPinnedObject(), (uint)count);
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr dest = buffer + structSize * i;
+                    Marshal.StructureToPtr(entries[i], dest, false);
+                }
+                return PE_MergeImports(ctx, buffer, (uint)count);
             }
             finally
             {
-                handle.Free();
+                // Free all strings marshalled by StructureToPtr
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr dest = buffer + structSize * i;
+                    Marshal.DestroyStructure<ImportEntry>(dest);
+                }
+                Marshal.FreeHGlobal(buffer);
             }
         }
 

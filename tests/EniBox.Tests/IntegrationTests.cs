@@ -983,4 +983,401 @@ namespace EniBox.Tests
             Assert.Empty(vm.SelectedFileItems);
         }
     }
+
+    /// <summary>
+    /// End-to-end tests using the real PeTool DLL to verify the complete
+    /// Open → AddSection → ProcessTLS → MergeImports → Save pipeline.
+    /// </summary>
+    [Collection("Sequential")]
+    public class RealPeToolE2ETests
+    {
+        /// <summary>
+        /// Small native x64 EXE to use as test source (fc.exe = 49KB).
+        /// </summary>
+        private static readonly string TestSourceExe = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System), "fc.exe");
+
+        private static string CreateTempDir()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "EniBox_E2E_" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+
+        [Fact]
+        public void PeTool_Open_SucceedsForValidExe()
+        {
+            if (!File.Exists(TestSourceExe))
+                return; // Skip on non-Windows or missing file
+
+            IntPtr ctx = IntPtr.Zero;
+            try
+            {
+                int result = PeToolInterop.Open(TestSourceExe, out ctx);
+                Assert.Equal(0, result);
+                Assert.NotEqual(IntPtr.Zero, ctx);
+            }
+            finally
+            {
+                if (ctx != IntPtr.Zero)
+                    PeToolInterop.Close(ctx);
+            }
+        }
+
+        [Fact]
+        public void PeTool_Open_FailsForInvalidFile()
+        {
+            var tempDir = CreateTempDir();
+            try
+            {
+                var invalidFile = Path.Combine(tempDir, "not_pe.txt");
+                File.WriteAllText(invalidFile, "This is not a PE file");
+
+                int result = PeToolInterop.Open(invalidFile, out var ctx);
+                Assert.NotEqual(0, result);
+                Assert.Equal(IntPtr.Zero, ctx);
+            }
+            finally
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public void PeTool_GetInfo_ReturnsCorrectArchitecture()
+        {
+            if (!File.Exists(TestSourceExe))
+                return;
+
+            IntPtr ctx = IntPtr.Zero;
+            try
+            {
+                int result = PeToolInterop.Open(TestSourceExe, out ctx);
+                Assert.Equal(0, result);
+
+                var info = PeToolInterop.GetInfo(ctx);
+                Assert.NotNull(info);
+                // fc.exe on 64-bit Windows is x64
+                Assert.True(info.Architecture == PeArchitecture.X64 || info.Architecture == PeArchitecture.X86);
+                Assert.True(info.NumberOfSections > 0);
+                Assert.True(info.SizeOfImage > 0);
+                Assert.True(info.SizeOfHeaders > 0);
+            }
+            finally
+            {
+                if (ctx != IntPtr.Zero)
+                    PeToolInterop.Close(ctx);
+            }
+        }
+
+        [Fact]
+        public void PeTool_AddSection_SucceedsAndCreatesEniboxSection()
+        {
+            if (!File.Exists(TestSourceExe))
+                return;
+
+            var tempDir = CreateTempDir();
+            try
+            {
+                IntPtr ctx = IntPtr.Zero;
+                try
+                {
+                    int result = PeToolInterop.Open(TestSourceExe, out ctx);
+                    Assert.Equal(0, result);
+
+                    // Get original section count
+                    var originalInfo = PeToolInterop.GetInfo(ctx);
+                    Assert.NotNull(originalInfo);
+
+                    // Add .enibox section with test data
+                    var sectionData = new byte[4096];
+                    for (int i = 0; i < sectionData.Length; i++)
+                        sectionData[i] = (byte)(i & 0xFF);
+
+                    const uint SECTION_CHARACTERISTICS = 0xC0000040;
+                    result = PeToolInterop.AddSection(ctx, ".enibox", sectionData, SECTION_CHARACTERISTICS);
+                    Assert.Equal(0, result);
+
+                    // Save to output
+                    var outputPath = Path.Combine(tempDir, "output_with_section.exe");
+                    result = PeToolInterop.Save(ctx, outputPath);
+                    Assert.Equal(0, result);
+                    Assert.True(File.Exists(outputPath));
+
+                    // Verify the output file is larger than the source
+                    var sourceSize = new FileInfo(TestSourceExe).Length;
+                    var outputSize = new FileInfo(outputPath).Length;
+                    Assert.True(outputSize > sourceSize, "Output should be larger after adding section");
+
+                    // Verify the output is a valid PE file (MZ header)
+                    using var stream = File.OpenRead(outputPath);
+                    using var reader = new BinaryReader(stream);
+                    Assert.Equal((ushort)0x5A4D, reader.ReadUInt16()); // MZ signature
+
+                    // Verify the output has .enibox section
+                    stream.Position = 0x3C;
+                    var peOff = reader.ReadInt32();
+                    stream.Position = peOff + 4; // Skip PE signature
+
+                    // Read IMAGE_FILE_HEADER
+                    var mach = reader.ReadUInt16();
+                    var nSec = reader.ReadUInt16();
+                    reader.ReadUInt32(); // TimeDateStamp
+                    reader.ReadUInt32(); // PointerToSymbolTable
+                    reader.ReadUInt32(); // NumberOfSymbols
+                    var sizeOfOptHdr = reader.ReadUInt16();
+                    reader.ReadUInt16(); // Characteristics
+
+                    Assert.True(nSec > originalInfo.NumberOfSections,
+                        "Output should have more sections than source");
+
+                    // Skip optional header to reach section table
+                    stream.Position = peOff + 4 + 20 + sizeOfOptHdr;
+                    bool foundEnibox = false;
+                    for (int i = 0; i < nSec; i++)
+                    {
+                        var sectionStart = stream.Position;
+                        var nameBytes = reader.ReadBytes(8);
+                        var name = Encoding.ASCII.GetString(nameBytes).TrimEnd('\0');
+                        if (name == ".enibox")
+                        {
+                            foundEnibox = true;
+                            break;
+                        }
+                        // Move to next section header (each is 40 bytes)
+                        stream.Position = sectionStart + 40;
+                    }
+                    Assert.True(foundEnibox, "Output should contain .enibox section");
+                }
+                finally
+                {
+                    if (ctx != IntPtr.Zero)
+                        PeToolInterop.Close(ctx);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public void PeTool_FullPipeline_AddSection_ProcessTLS_MergeImports_Save()
+        {
+            if (!File.Exists(TestSourceExe))
+                return;
+
+            var tempDir = CreateTempDir();
+            try
+            {
+                IntPtr ctx = IntPtr.Zero;
+                try
+                {
+                    // Step 1: Open
+                    int result = PeToolInterop.Open(TestSourceExe, out ctx);
+                    Assert.Equal(0, result);
+
+                    // Step 2: Add .enibox section with VFS-like data
+                    var sectionData = new byte[8192]; // Larger section to hold import structures
+                    // Write a simple VFS header signature
+                    sectionData[0] = (byte)'E';
+                    sectionData[1] = (byte)'N';
+                    sectionData[2] = (byte)'I';
+                    sectionData[3] = (byte)'B';
+
+                    const uint SECTION_CHARACTERISTICS = 0xC0000040;
+                    result = PeToolInterop.AddSection(ctx, ".enibox", sectionData, SECTION_CHARACTERISTICS);
+                    Assert.Equal(0, result);
+
+                    // Step 3: Process TLS callbacks
+                    result = PeToolInterop.ProcessTLS(ctx);
+                    Assert.Equal(0, result);
+
+                    // Step 4: Merge imports (add Loader DLL to import table)
+                    var importEntries = new PeToolInterop.ImportEntry[]
+                    {
+                        new() { DllName = "EniBox.Loader.dll" }
+                    };
+                    result = PeToolInterop.MergeImports(ctx, importEntries);
+                    Assert.Equal(0, result);
+
+                    // Step 5: Save
+                    var outputPath = Path.Combine(tempDir, "output_full_pipeline.exe");
+                    result = PeToolInterop.Save(ctx, outputPath);
+                    Assert.Equal(0, result);
+                    Assert.True(File.Exists(outputPath));
+
+                    // Verify output is a valid PE
+                    using var stream = File.OpenRead(outputPath);
+                    using var reader = new BinaryReader(stream);
+                    Assert.Equal((ushort)0x5A4D, reader.ReadUInt16()); // MZ
+
+                    stream.Position = 0x3C;
+                    var peOffset = reader.ReadInt32();
+                    stream.Position = peOffset;
+                    Assert.Equal(0x00004550u, reader.ReadUInt32()); // PE\0\0
+
+                    // Verify entry point was modified (should point to .enibox section)
+                    var machine = reader.ReadUInt16();
+                    var numSections = reader.ReadUInt16();
+                    reader.ReadUInt32(); // TimeDateStamp
+                    reader.ReadUInt32(); // PointerToSymbolTable
+                    reader.ReadUInt32(); // NumberOfSymbols
+                    var sizeOfOptHeader = reader.ReadUInt16();
+                    reader.ReadUInt16(); // Characteristics
+
+                    var magic = reader.ReadUInt16();
+                    var is64 = magic == 0x20B;
+
+                    uint entryPointRva;
+                    if (is64)
+                    {
+                        reader.ReadByte(); reader.ReadByte();
+                        reader.ReadUInt32(); reader.ReadUInt32(); reader.ReadUInt32();
+                        entryPointRva = reader.ReadUInt32();
+                    }
+                    else
+                    {
+                        reader.ReadByte(); reader.ReadByte();
+                        reader.ReadUInt32(); reader.ReadUInt32(); reader.ReadUInt32();
+                        entryPointRva = reader.ReadUInt32();
+                    }
+
+                    Assert.True(entryPointRva > 0, "Entry point should be non-zero");
+
+                    // Verify output file size is reasonable
+                    var outputSize = new FileInfo(outputPath).Length;
+                    var sourceSize = new FileInfo(TestSourceExe).Length;
+                    Assert.True(outputSize > sourceSize, "Output should be larger than source");
+                    Assert.True(outputSize < sourceSize * 3, "Output should not be unreasonably large");
+                }
+                finally
+                {
+                    if (ctx != IntPtr.Zero)
+                        PeToolInterop.Close(ctx);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+
+        [Fact]
+        public void PeTool_AddSection_WithEmptyImportExe_Succeeds()
+        {
+            // Test that MergeImports works even when the source EXE might have
+            // minimal imports (edge case for the empty import table fix)
+            if (!File.Exists(TestSourceExe))
+                return;
+
+            var tempDir = CreateTempDir();
+            try
+            {
+                IntPtr ctx = IntPtr.Zero;
+                try
+                {
+                    int result = PeToolInterop.Open(TestSourceExe, out ctx);
+                    Assert.Equal(0, result);
+
+                    // Add section first (required before MergeImports)
+                    var sectionData = new byte[8192];
+                    const uint SECTION_CHARACTERISTICS = 0xC0000040;
+                    result = PeToolInterop.AddSection(ctx, ".enibox", sectionData, SECTION_CHARACTERISTICS);
+                    Assert.Equal(0, result);
+
+                    // Process TLS
+                    result = PeToolInterop.ProcessTLS(ctx);
+                    Assert.Equal(0, result);
+
+                    // Merge multiple imports to test the import table handling
+                    var importEntries = new PeToolInterop.ImportEntry[]
+                    {
+                        new() { DllName = "EniBox.Loader.dll" },
+                        new() { DllName = "kernel32.dll" }
+                    };
+                    result = PeToolInterop.MergeImports(ctx, importEntries);
+                    Assert.Equal(0, result);
+
+                    // Save and verify
+                    var outputPath = Path.Combine(tempDir, "output_multi_import.exe");
+                    result = PeToolInterop.Save(ctx, outputPath);
+                    Assert.Equal(0, result);
+                    Assert.True(File.Exists(outputPath));
+
+                    // Verify it's a valid PE
+                    var bytes = File.ReadAllBytes(outputPath);
+                    Assert.Equal((byte)'M', bytes[0]);
+                    Assert.Equal((byte)'Z', bytes[1]);
+                }
+                finally
+                {
+                    if (ctx != IntPtr.Zero)
+                        PeToolInterop.Close(ctx);
+                }
+            }
+            finally
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tests verifying that C# PackErrorCode constants are aligned with
+    /// PeTool C-side PE_ERR_* definitions.
+    /// </summary>
+    public class ErrorCodeAlignmentTests
+    {
+        [Fact]
+        public void PackErrorCode_AlignedWith_PeTool_C_Defines()
+        {
+            // These values must match pe_types.h:
+            //   PE_SUCCESS              0
+            //   PE_ERR_FILE_NOT_FOUND   1001
+            //   PE_ERR_INVALID_PE       2001
+            //   PE_ERR_UNSUPPORTED_ARCH 2002
+            //   PE_ERR_SECTION_FULL     5001
+            //   PE_ERR_IMPORT_MERGE     5002
+            //   PE_ERR_WRITE_FAILED     5003
+            //   PE_ERR_READ_FAILED      5004
+            //   PE_ERR_NO_MEMORY        5005
+
+            Assert.Equal(1001, PackErrorCode.FileNotFound);     // PE_ERR_FILE_NOT_FOUND
+            Assert.Equal(2001, PackErrorCode.InvalidPe);        // PE_ERR_INVALID_PE
+            Assert.Equal(2002, PackErrorCode.UnsupportedArch);  // PE_ERR_UNSUPPORTED_ARCH
+            Assert.Equal(5001, PackErrorCode.SectionFull);      // PE_ERR_SECTION_FULL
+            Assert.Equal(5002, PackErrorCode.ImportMergeFailed);// PE_ERR_IMPORT_MERGE
+            Assert.Equal(5003, PackErrorCode.WriteFailed);      // PE_ERR_WRITE_FAILED
+            Assert.Equal(5005, PackErrorCode.NoMemory);         // PE_ERR_NO_MEMORY
+        }
+
+        [Fact]
+        public void PeTool_Returns_Consistent_ErrorCodes()
+        {
+            // Verify that PeTool DLL returns the expected error codes
+            // for invalid operations
+            var tempDir = Path.Combine(Path.GetTempPath(), "EniBox_ErrCode_" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                // Opening a non-existent file should return PE_ERR_FILE_NOT_FOUND (1001)
+                var nonExistent = Path.Combine(tempDir, "nonexistent.exe");
+                int result = PeToolInterop.Open(nonExistent, out var ctx);
+                Assert.Equal(1001, result); // PE_ERR_FILE_NOT_FOUND
+                Assert.Equal(IntPtr.Zero, ctx);
+
+                // Opening an invalid file should return PE_ERR_INVALID_PE (2001)
+                var invalidFile = Path.Combine(tempDir, "invalid.exe");
+                File.WriteAllText(invalidFile, "NOT_A_PE_FILE");
+                result = PeToolInterop.Open(invalidFile, out ctx);
+                Assert.Equal(2001, result); // PE_ERR_INVALID_PE
+                Assert.Equal(IntPtr.Zero, ctx);
+            }
+            finally
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
 }

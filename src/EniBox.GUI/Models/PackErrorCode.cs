@@ -7,16 +7,15 @@ namespace EniBox.GUI.Models
     ///   2000-2999: PE format errors
     ///   3000-3999: VFS errors
     ///   4000-4999: Compression errors
-    ///   5000-5999: PE modification errors
+    ///   5000-5999: PE modification errors (aligned with PeTool C PE_ERR_*)
     ///   6000-6999: Loader errors
     ///   9000-9999: General errors
     /// </summary>
     public static class PackErrorCode
     {
-        // File I/O errors (1000-1999) - aligned with PeTool
+        // File I/O errors (1000-1999) - aligned with PeTool PE_ERR_FILE_NOT_FOUND
         public const int FileNotFound     = 1001;
-        public const int ReadFailed       = 1002;
-        public const int WriteFailed      = 1003;
+        public const int ReadFailed       = 5004; // Aligned with PeTool PE_ERR_READ_FAILED
 
         // PE format errors (2000-2999) - aligned with PeTool
         public const int InvalidPe        = 2001;
@@ -33,7 +32,8 @@ namespace EniBox.GUI.Models
         public const int CompressionFailed   = 4001;
         public const int DecompressionFailed = 4002;
 
-        // PE modification errors (5000-5999) - aligned with PeTool
+        // PE modification errors (5000-5999) - aligned with PeTool PE_ERR_*
+        public const int WriteFailed      = 5003; // Aligned with PeTool PE_ERR_WRITE_FAILED
         public const int SectionFull       = 5001;
         public const int ImportMergeFailed = 5002;
         public const int NoMemory          = 5005;

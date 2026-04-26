@@ -10,9 +10,8 @@
 
 ## 🟡 功能增强
 
-### 3. 端到端真实 PE 打包测试
-- **问题**: 现有 52 个测试覆盖模型/压缩/VFS/布局，但未使用真实 PE 文件测试完整 Pack→Save 流程（需要 PeTool DLL 在运行时可用）
-- **需要**: 创建集成测试，使用小型 console EXE 作为源，调用完整 PackAsync 流程，验证输出 EXE 包含 `.enibox` 节且 PE 结构有效
+### ~~3. 端到端真实 PE 打包测试~~ ✅ 已完成
+- **完成内容**: 添加 `RealPeToolE2ETests`（5 个测试）使用 fc.exe 作为源，验证完整 Open→AddSection→ProcessTLS→MergeImports→Save 流程，输出 EXE 包含 `.enibox` 节且 PE 结构有效。同时修复了 `MergeImports` 的 GCHandle pinning 问题（改用 `Marshal.AllocHGlobal` + `StructureToPtr`）
 
 ### 4. Loader DLL 嵌入到输出 EXE
 - **问题**: 当前 `CombineSectionData` 将 Loader DLL 字节写入 `.enibox` 节数据区，但 Loader 的 `DllMain` 是通过导入表触发的——导入表引用的是外部 `EniBox.Loader.dll` 文件，而非节内嵌入的副本
@@ -28,9 +27,8 @@
 - **问题**: 增强版 `GetInstructionLength` 仍不支持 VEX 前缀（3 字节 `C4`/`C5`）和 EVEX 前缀（4 字节 `62`），AVX/AVX2 函数的 Hook 可能失败
 - **需要**: 添加 VEX/EVEX 前缀解码，或集成完整 MinHook 库
 
-### 7. 错误码与 C 端对齐验证
-- **问题**: C# `PackErrorCode` 常量与 PeTool C 端 `PE_ERR_*` 定义未做自动化对齐验证
-- **需要**: 添加测试验证 `PackErrorCode.SectionFull` 等与 `PE_ERR_SECTION_FULL` 数值一致
+### ~~7. 错误码与 C 端对齐验证~~ ✅ 已完成
+- **完成内容**: 添加 `ErrorCodeAlignmentTests`（2 个测试）验证 PackErrorCode 常量与 PeTool C 端 `PE_ERR_*` 数值一致，并通过 PeTool DLL 实际调用验证错误码返回值。修正了 `WriteFailed`（1003→5003）和 `ReadFailed`（1002→5004）与 C 端对齐
 
 ### 8. CLI 模式 System.CommandLine 版本
 - **问题**: 使用的是 `2.0.0-beta4` 预发布版，API 可能在未来版本中变化
