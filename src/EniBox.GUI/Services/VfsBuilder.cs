@@ -264,7 +264,9 @@ namespace EniBox.GUI.Services
 
         private static void CollectNodes(VfsDirNode node, List<VfsDirNode> dirs, List<PackFileItem> files)
         {
-            if (node != null && node.Name != "")
+            if (node == null) return;
+
+            if (node.Name != "")
                 dirs.Add(node);
 
             foreach (var file in node.Files)

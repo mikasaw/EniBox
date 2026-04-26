@@ -27,6 +27,8 @@ namespace EniBox.GUI.Services
             string? tempOutputPath = null;
             try
             {
+                await Task.CompletedTask; // Ensure async behavior for cancellation support
+
                 // Stage 1: Validate input
                 ReportProgress(progressCallback, PackStage.CollectingFiles, 0, config.Files.Count, "Validating input...");
 
@@ -259,7 +261,7 @@ namespace EniBox.GUI.Services
                 return null;
 
             var assembly = Assembly.GetExecutingAssembly();
-            using var? stream = assembly.GetManifestResourceStream(resourceName);
+            using var stream = assembly.GetManifestResourceStream(resourceName);
             if (stream == null)
                 return null;
 
