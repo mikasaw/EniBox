@@ -78,6 +78,16 @@ namespace EniBox.GUI.Interop
             return PE_SetEntryPoint(ctx, newEntryRva);
         }
 
+        public static int MergeImports(IntPtr ctx, IntPtr entries, uint count)
+        {
+            return PE_MergeImports(ctx, entries, count);
+        }
+
+        public static int ProcessTLS(IntPtr ctx)
+        {
+            return PE_ProcessTLS(ctx);
+        }
+
         public static int Save(IntPtr ctx, string outputPath)
         {
             return PE_Save(ctx, outputPath);

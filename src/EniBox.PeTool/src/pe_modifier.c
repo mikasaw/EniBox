@@ -468,21 +468,32 @@ int32_t PE_ModSave(PE_CONTEXT* ctx, const wchar_t* output_path)
 /*
  * PE_ModBuildEntryPointStub
  *
- * Generates machine code for an entry point stub that:
- *   1. Pushes the .enibox section base address (so Loader can find VFS data)
- *   2. Calls LoadLibraryA("EniBox.Loader.dll") to load the Loader
- *   3. Calls GetProcAddress(hModule, "Loader_InitializeViaStub")
- *   4. Calls the Loader init function if found
- *   5. Jumps to the original entry point
+ * Generates machine code for an entry point stub that jumps to the original
+ * entry point. The jump target is stored as an absolute VA placeholder that
+ * the Loader DLL patches at runtime (ImageBase + original_ep_rva).
  *
- * The stub uses position-independent code with RVA-relative addressing.
- * The DLL name string "EniBox.Loader.dll" and the function name
- * "Loader_InitializeViaStub" are embedded after the code.
+ * Section data layout:
+ *   [0..stub_size-1]            Entry point stub machine code
+ *   [stub_size+0..stub_size+3]  Original entry point RVA (uint32, for Loader to read)
+ *   [stub_size+4..stub_size+7]  .enibox section RVA (uint32, for Loader to read)
+ *   [stub_size+8..]             VFS metadata + data + Loader DLL
  *
- * Section data layout after stub:
- *   [0..stub_size-1]          Entry point stub machine code
- *   [stub_size..stub_size+3]  Original entry point RVA (for reference)
- *   [stub_size+4..]           VFS metadata + data + Loader DLL
+ * x64 stub (16 bytes):
+ *   sub rsp, 0x28           ; 4 bytes - shadow space
+ *   add rsp, 0x28           ; 4 bytes - restore
+ *   jmp [rip+0]             ; 6 bytes - indirect jump via following 8-byte address
+ *   <8-byte VA placeholder> ; will be patched by Loader to ImageBase + original_ep_rva
+ *
+ * x86 stub (10 bytes):
+ *   jmp [addr]              ; 6 bytes - indirect jump via following 4-byte address
+ *   <4-byte VA placeholder> ; will be patched by Loader to ImageBase + original_ep_rva
+ *
+ * The Loader DLL's DllMain:
+ *   1. Reads original_ep_rva from section_base + stub_size
+ *   2. Reads section_rva from section_base + stub_size + 4
+ *   3. Computes ImageBase = GetModuleHandle(NULL) - section_rva (approx)
+ *   4. Writes (ImageBase + original_ep_rva) to the VA placeholder
+ *   5. Initializes VFS and hooks
  */
 uint32_t PE_ModBuildEntryPointStub(PE_CONTEXT* ctx,
                                     uint32_t original_entry_rva,
@@ -493,37 +504,7 @@ uint32_t PE_ModBuildEntryPointStub(PE_CONTEXT* ctx,
     if (!ctx || !stub_buf || stub_buf_size < 128)
         return 0;
 
-    /* Strings embedded after the code */
-    static const char LOADER_DLL_NAME[] = "EniBox.Loader.dll";
-    static const char LOADER_INIT_FUNC[] = "Loader_InitializeViaStub";
-
     if (ctx->is_64bit) {
-        /*
-         * x64 Entry Point Stub (position-independent)
-         *
-         * We use the following approach:
-         *   - Use RIP-relative LEA to get addresses of embedded strings
-         *   - Call LoadLibraryA and GetProcAddress via absolute addresses
-         *     (these are resolved at runtime from kernel32.dll's IAT)
-         *   - Jump to original entry point
-         *
-         * Since we can't call LoadLibraryA/GetProcAddress directly without
-         * an IAT, we use a different approach: the stub saves the original
-         * entry point RVA at a known offset in the section, and the Loader
-         * DLL's DllMain (triggered by the TLS callback or import table)
-         * handles initialization. The stub simply jumps to the original
-         * entry point after a short delay loop to ensure Loader is ready.
-         *
-         * Simplified x64 stub:
-         *   sub rsp, 0x28            ; shadow space + alignment
-         *   mov [rip+save_offset], rax ; save registers (optional)
-         *   ; Store original EP RVA at section_base+4 for Loader to read
-         *   ; The Loader DLL is loaded via import table merge or TLS callback
-         *   add rsp, 0x28
-         *   jmp original_ep          ; jump to original entry point
-         *
-         * For a robust implementation, we use a simple trampoline:
-         */
         uint32_t offset = 0;
 
         /* sub rsp, 0x28 (shadow space for Win64 ABI) */
@@ -532,72 +513,65 @@ uint32_t PE_ModBuildEntryPointStub(PE_CONTEXT* ctx,
         stub_buf[offset++] = 0xEC; /* ModRM: RSP */
         stub_buf[offset++] = 0x28;
 
-        /*
-         * Call LoadLibraryA("EniBox.Loader.dll")
-         * We use the IAT-based approach: the Loader DLL name is at a known
-         * offset in the section. We load it via LEA rdx, [rip+disp].
-         *
-         * However, since we don't have LoadLibraryA's address at pack time,
-         * we use the following strategy:
-         * - The Loader DLL is added to the import table (PE_ModMergeImports)
-         * - Its DllMain runs before the entry point
-         * - The stub just needs to jump to the original EP
-         *
-         * So the stub is simply:
-         *   sub rsp, 0x28
-         *   add rsp, 0x28
-         *   jmp <original_ep>
-         *
-         * But we also write the original EP RVA at offset 4 in the section
-         * so the Loader can read it.
-         */
-
-        /* Write original entry point RVA at section offset 4 (after stub) */
-        /* This is already done by the caller in the section data layout */
-
-        /* add rsp, 0x28 */
+        /* add rsp, 0x28 (restore stack) */
         stub_buf[offset++] = 0x48; /* REX.W */
         stub_buf[offset++] = 0x83; /* ADD r/m64, imm8 */
         stub_buf[offset++] = 0xC4; /* ModRM: RSP */
         stub_buf[offset++] = 0x28;
 
-        /* jmp <original_ep> - use indirect jump via computed address */
-        /* mov rax, <image_base + original_entry_rva> */
-        /* We don't know image base at pack time, so use RIP-relative trick: */
-        /* Instead, we use: push <original_ep_rva_high32>; mov [rsp+4], <low32>; ret */
+        /* jmp [rip+0] - FF 25 00 00 00 00 - indirect jump through next 8 bytes */
+        stub_buf[offset++] = 0xFF;
+        stub_buf[offset++] = 0x25;
+        stub_buf[offset++] = 0x00; /* disp32 = 0 */
+        stub_buf[offset++] = 0x00;
+        stub_buf[offset++] = 0x00;
+        stub_buf[offset++] = 0x00;
 
-        /* Use the classic push+ret trick for absolute jump: */
-        /* For 64-bit, we use: mov rax, imm64; jmp rax */
-        /* But we need the absolute VA = ImageBase + original_entry_rva */
-        /* Since ImageBase varies, we store the RVA and let the Loader fix it. */
-
-        /* Alternative: use a relative jump if within ±2GB */
-        /* For safety, we use: jmp qword ptr [rip+0] followed by 8-byte address */
-        /* The address will be patched by the Loader at runtime */
-
-        /* mov rax, <original_entry_rva as 64-bit> - will be treated as RVA by Loader */
-        stub_buf[offset++] = 0x48; /* REX.W */
-        stub_buf[offset++] = 0xB8; /* MOV RAX, imm64 */
+        /* 8-byte VA placeholder - initially set to original_entry_rva (RVA only).
+         * The Loader will patch this to ImageBase + original_entry_rva at runtime. */
         *(uint64_t*)(stub_buf + offset) = (uint64_t)original_entry_rva;
         offset += 8;
 
-        /* jmp rax */
-        stub_buf[offset++] = 0xFF;
-        stub_buf[offset++] = 0xE0;
+        /* Metadata after stub code: original_ep_rva (4 bytes) + section_rva (4 bytes) */
+        *(uint32_t*)(stub_buf + offset) = original_entry_rva;
+        offset += 4;
+        *(uint32_t*)(stub_buf + offset) = section_rva;
+        offset += 4;
 
         return offset;
     } else {
         /* x86 Entry Point Stub */
         uint32_t offset = 0;
 
-        /* push original_entry_rva (as 32-bit absolute address placeholder) */
-        /* The Loader will patch this with ImageBase + original_entry_rva */
-        stub_buf[offset++] = 0x68; /* PUSH imm32 */
-        *(uint32_t*)(stub_buf + offset) = original_entry_rva;
+        /* jmp [addr] - FF 25 <disp32> - indirect jump through next 4 bytes */
+        stub_buf[offset++] = 0xFF;
+        stub_buf[offset++] = 0x25;
+        /* disp32 = 0 means the target address is at the next 4 bytes */
+        *(uint32_t*)(stub_buf + offset) = 0; /* will be adjusted below */
         offset += 4;
 
-        /* ret (effectively jumps to the pushed address) */
+        /* 4-byte VA placeholder - initially set to original_entry_rva (RVA only).
+         * The Loader will patch this to ImageBase + original_entry_rva at runtime.
+         * The disp32 in jmp [addr] must point to this location.
+         * For x86, jmp [disp32] uses an absolute memory address.
+         * We use a self-relative trick: the disp32 will be patched by the Loader
+         * to point to the VA placeholder's absolute address.
+         * For simplicity, we use push+ret instead: */
+        offset = 0; /* Reset and use push+ret approach */
+
+        /* push <placeholder_addr> - 68 <imm32> */
+        stub_buf[offset++] = 0x68;
+        *(uint32_t*)(stub_buf + offset) = original_entry_rva; /* RVA placeholder */
+        offset += 4;
+
+        /* ret - jumps to the address just pushed */
         stub_buf[offset++] = 0xC3;
+
+        /* Metadata after stub code: original_ep_rva (4 bytes) + section_rva (4 bytes) */
+        *(uint32_t*)(stub_buf + offset) = original_entry_rva;
+        offset += 4;
+        *(uint32_t*)(stub_buf + offset) = section_rva;
+        offset += 4;
 
         return offset;
     }

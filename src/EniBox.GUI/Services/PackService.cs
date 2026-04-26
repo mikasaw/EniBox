@@ -72,7 +72,8 @@ namespace EniBox.GUI.Services
                     return new PackResult { IsSuccess = false, ErrorMessage = $"Unsupported architecture: {peInfo.Architecture}. Only x86 and x64 are supported." };
 
                 // Combine VFS data + Loader DLL into section data
-                var sectionData = CombineSectionData(vfsResult, loaderData, peInfo.EntryPointRva);
+                // (PeTool's stub generator prepends entry point stub + metadata)
+                var sectionData = CombineSectionData(vfsResult, loaderData);
 
                 // Apply PE modifications via PeTool DLL
                 var peError = ApplyPeModifications(config.SourceExePath, config.OutputPath, sectionData);
@@ -270,13 +271,10 @@ namespace EniBox.GUI.Services
             return data;
         }
 
-        private static byte[] CombineSectionData(VfsBuildResult vfsResult, byte[] loaderData, uint originalEntryPoint)
+        private static byte[] CombineSectionData(VfsBuildResult vfsResult, byte[] loaderData)
         {
             using var ms = new MemoryStream();
             using var writer = new BinaryWriter(ms);
-
-            // Write original entry point RVA (8 bytes for alignment)
-            writer.Write(originalEntryPoint);
 
             // Write VFS metadata
             writer.Write(vfsResult.Metadata);
@@ -308,7 +306,15 @@ namespace EniBox.GUI.Services
                     return $"Failed to add .enibox section (error {result}).";
 
                 // Process TLS callbacks to ensure Loader initializes before TLS
-                // (TLS handling is done inside PeTool; entry point is set by the section stub)
+                result = PeToolInterop.ProcessTLS(ctx);
+                if (result != 0)
+                    return $"Failed to process TLS callbacks (error {result}).";
+
+                // Merge Loader DLL into import table so it loads before entry point
+                result = PeToolInterop.MergeImports(ctx, IntPtr.Zero, 0);
+                if (result != 0)
+                    return $"Failed to merge imports (error {result}).";
+
                 result = PeToolInterop.Save(ctx, outputPath);
                 if (result != 0)
                     return $"Failed to save modified PE (error {result}).";
