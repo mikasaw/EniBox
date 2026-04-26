@@ -1,0 +1,5 @@
+f:\AITest\enibox\src\EniBox.PeTool\src\pe_parser.c;f:\AITest\enibox\src\EniBox.PeTool\EniBox.PeTool\x64\Release\pe_parser.obj
+f:\AITest\enibox\src\EniBox.PeTool\src\pe_modifier.c;f:\AITest\enibox\src\EniBox.PeTool\EniBox.PeTool\x64\Release\pe_modifier.obj
+f:\AITest\enibox\src\EniBox.PeTool\src\pe_context.c;f:\AITest\enibox\src\EniBox.PeTool\EniBox.PeTool\x64\Release\pe_context.obj
+f:\AITest\enibox\src\EniBox.PeTool\src\pe_main.c;f:\AITest\enibox\src\EniBox.PeTool\EniBox.PeTool\x64\Release\pe_main.obj
+f:\AITest\enibox\src\EniBox.PeTool\src\crc32.c;f:\AITest\enibox\src\EniBox.PeTool\EniBox.PeTool\x64\Release\crc32.obj

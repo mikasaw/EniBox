@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{C1D2E3F4-A5B6-7890-CDEF-123456789012}</ProjectGuid>
+    <RootNamespace>EniBox.Loader</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" />
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;ENIBOX_LOADER_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalIncludeDirectories>include;deps\MinHook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_DEBUG;_WINDOWS;_USRDLL;ENIBOX_LOADER_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalIncludeDirectories>include;deps\MinHook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;ENIBOX_LOADER_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>include;deps\MinHook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;_WINDOWS;_USRDLL;ENIBOX_LOADER_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>include;deps\MinHook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\loader_main.c" />
+    <ClCompile Include="src\vfs_runtime.c" />
+    <ClCompile Include="src\vfs_hashtable.c" />
+    <ClCompile Include="src\vfs_handle.c" />
+    <ClCompile Include="src\hook_manager.c" />
+    <ClCompile Include="src\hook_fileapi.c" />
+    <ClCompile Include="src\hook_ntapi.c" />
+    <ClCompile Include="src\hook_findfile.c" />
+    <ClCompile Include="src\hook_filemapping.c" />
+    <ClCompile Include="src\hook_process.c" />
+    <ClCompile Include="src\hook_registry.c" />
+    <ClCompile Include="src\inject.c" />
+    <ClCompile Include="src\lzma_dec.c" />
+    <ClCompile Include="src\crc32.c" />
+    <ClCompile Include="deps\MinHook\src\hook.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\loader_main.h" />
+    <ClInclude Include="include\vfs_runtime.h" />
+    <ClInclude Include="include\vfs_hashtable.h" />
+    <ClInclude Include="include\vfs_handle.h" />
+    <ClInclude Include="include\vfs_types.h" />
+    <ClInclude Include="include\hook_manager.h" />
+    <ClInclude Include="include\hook_fileapi.h" />
+    <ClInclude Include="include\hook_ntapi.h" />
+    <ClInclude Include="include\hook_findfile.h" />
+    <ClInclude Include="include\hook_filemapping.h" />
+    <ClInclude Include="include\hook_process.h" />
+    <ClInclude Include="include\hook_registry.h" />
+    <ClInclude Include="include\inject.h" />
+    <ClInclude Include="include\lzma_dec.h" />
+    <ClInclude Include="include\crc32.h" />
+    <ClInclude Include="deps\MinHook\include\MinHook.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

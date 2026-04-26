@@ -1,0 +1,20 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+    <sys:String x:Key="Str_SourceExe">主程序</sys:String>
+    <sys:String x:Key="Str_OutputPath">输出路径</sys:String>
+    <sys:String x:Key="Str_Browse">浏览</sys:String>
+    <sys:String x:Key="Str_Files">文件列表</sys:String>
+    <sys:String x:Key="Str_AddFiles">添加文件</sys:String>
+    <sys:String x:Key="Str_AddDir">添加文件夹</sys:String>
+    <sys:String x:Key="Str_Remove">移除</sys:String>
+    <sys:String x:Key="Str_VirtualPath">虚拟路径</sys:String>
+    <sys:String x:Key="Str_SourcePath">源路径</sys:String>
+    <sys:String x:Key="Str_Size">大小</sys:String>
+    <sys:String x:Key="Str_Compress">压缩</sys:String>
+    <sys:String x:Key="Str_Virtualize">虚拟化</sys:String>
+    <sys:String x:Key="Str_RegVirt">注册表虚拟化</sys:String>
+    <sys:String x:Key="Str_SubProc">子进程注入</sys:String>
+    <sys:String x:Key="Str_Pack">封包</sys:String>
+    <sys:String x:Key="Str_Log">日志</sys:String>
+</ResourceDictionary>

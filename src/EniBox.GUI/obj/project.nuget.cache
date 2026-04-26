@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "TVXjtdFM0mM=",
+  "success": true,
+  "projectFilePath": "f:\\AITest\\enibox\\src\\EniBox.GUI\\EniBox.GUI.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\30275\\.nuget\\packages\\communitytoolkit.mvvm\\8.3.2\\communitytoolkit.mvvm.8.3.2.nupkg.sha512",
+    "C:\\Users\\30275\\.nuget\\packages\\lzma-sdk\\22.1.0\\lzma-sdk.22.1.0.nupkg.sha512",
+    "C:\\Users\\30275\\.nuget\\packages\\system.commandline\\2.0.0-beta4.22272.1\\system.commandline.2.0.0-beta4.22272.1.nupkg.sha512"
+  ],
+  "logs": []
+}

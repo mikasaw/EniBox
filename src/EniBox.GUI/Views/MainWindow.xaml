@@ -1,0 +1,78 @@
+<Window x:Class="EniBox.GUI.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:EniBox.GUI.ViewModels"
+        Title="EniBox - Virtual File Box Packer" Height="600" Width="800"
+        AllowDrop="True" Drop="Window_Drop" DragOver="Window_DragOver"
+        WindowStartupLocation="CenterScreen">
+
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Source EXE -->
+        <GroupBox Grid.Row="0" Header="{DynamicResource Str_SourceExe}" Margin="0,0,0,5">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="{DynamicResource Str_Browse}" Width="80"
+                        Command="{Binding browseSourceCommand}" Margin="5,0,0,0"/>
+                <TextBox Text="{Binding SourceExePath, UpdateSourceTrigger=PropertyChanged}" IsReadOnly="True"/>
+            </DockPanel>
+        </GroupBox>
+
+        <!-- Output Path -->
+        <GroupBox Grid.Row="1" Header="{DynamicResource Str_OutputPath}" Margin="0,0,0,5">
+            <DockPanel>
+                <Button DockPanel.Dock="Right" Content="{DynamicResource Str_Browse}" Width="80"
+                        Command="{Binding BrowseOutputCommand}" Margin="5,0,0,0"/>
+                <TextBox Text="{Binding OutputPath, UpdateSourceTrigger=PropertyChanged}"/>
+            </DockPanel>
+        </GroupBox>
+
+        <!-- File List -->
+        <GroupBox Grid.Row="2" Header="{DynamicResource Str_Files}" Margin="0,0,0,5">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,5">
+                    <Button Content="{DynamicResource Str_AddFiles}" Command="{Binding AddFilesCommand}" Margin="0,0,5,0" Padding="10,2"/>
+                    <Button Content="{DynamicResource Str_AddDir}" Command="{Binding AddDirectoryCommand}" Margin="0,0,5,0" Padding="10,2"/>
+                    <Button Content="{DynamicResource Str_Remove}" Command="{Binding RemoveFilesCommand}" Padding="10,2"/>
+                </StackPanel>
+                <DataGrid ItemsSource="{Binding FileItems}" AutoGenerateColumns="False"
+                          AllowDrop="True" SelectionMode="Extended" CanUserAddRows="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="{DynamicResource Str_VirtualPath}" Binding="{Binding VirtualPath}" Width="2*"/>
+                        <DataGridTextColumn Header="{DynamicResource Str_SourcePath}" Binding="{Binding SourcePath}" Width="2*" IsReadOnly="True"/>
+                        <DataGridTextColumn Header="{DynamicResource Str_Size}" Binding="{Binding OriginalSize}" Width="Auto" IsReadOnly="True"/>
+                        <DataGridCheckBoxColumn Header="{DynamicResource Str_Compress}" Binding="{Binding IsCompressed}" Width="Auto"/>
+                        <DataGridCheckBoxColumn Header="{DynamicResource Str_Virtualize}" Binding="{Binding IsVirtualized}" Width="Auto"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+        </GroupBox>
+
+        <!-- Options -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,0,0,5">
+            <CheckBox Content="{DynamicResource Str_RegVirt}" IsChecked="{Binding EnableRegistryVirtualization}" Margin="0,0,15,0"/>
+            <CheckBox Content="{DynamicResource Str_SubProc}" IsChecked="{Binding EnableSubProcessInjection}"/>
+        </StackPanel>
+
+        <!-- Pack Button -->
+        <DockPanel Grid.Row="4" Margin="0,0,0,5">
+            <Button Content="{DynamicResource Str_Pack}" Command="{Binding PackCommand}"
+                    Width="120" Height="35" FontSize="14" FontWeight="Bold"
+                    DockPanel.Dock="Right" Margin="10,0,0,0"/>
+            <ProgressBar Value="{Binding PackProgress.ProgressPercent}" Minimum="0" Maximum="100" Height="20"/>
+        </DockPanel>
+
+        <!-- Log -->
+        <GroupBox Grid.Row="5" Header="{DynamicResource Str_Log}" Height="100">
+            <TextBox Text="{Binding LogText}" IsReadOnly="True" VerticalScrollBarVisibility="Auto"
+                     TextWrapping="Wrap" FontFamily="Consolas"/>
+        </GroupBox>
+    </Grid>
+</Window>
