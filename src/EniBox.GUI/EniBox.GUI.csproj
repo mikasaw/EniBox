@@ -14,6 +14,7 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <Nullable>enable</Nullable>
     <DefineConstants Condition="'$(CLI_MODE)' == 'true'">$(DefineConstants);CLI_MODE</DefineConstants>
+    <StartupObject>EniBox.GUI.Program</StartupObject>
   </PropertyGroup>
 
   <!-- Publish configuration: single self-contained EXE with embedded native DLLs -->
