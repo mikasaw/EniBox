@@ -8,7 +8,8 @@
 - **虚拟文件系统 (VFS)** — 运行时通过 API Hook 透明重定向文件访问，无需解压到磁盘
 - **LZMA 压缩** — 使用 LZMA 算法压缩 VFS 数据，减小输出文件体积
 - **注册表虚拟化** — 可选 Hook 注册表 API，隔离注册表读写
-- **子进程注入** — 自动将 Loader DLL 注入子进程，确保子进程也能访问 VFS
+- **子进程注入** — 三级注入策略 (QueueUserAPC → NtCreateThreadEx → CreateRemoteThread)，自动将 Loader DLL 注入子进程，确保子进程也能访问 VFS
+- **安全加固** — DLL 提取使用随机子目录隔离 + CRC32 完整性校验 + FILE_FLAG_WRITE_THROUGH 独占写入
 - **CLI + GUI 双模式** — 支持图形界面和命令行两种操作方式
 - **国际化** — 支持中文 (zh-CN) 和英文 (en-US) 界面
 
@@ -70,7 +71,8 @@ EniBox/
 │   └── EniBox.Loader/       # C/C++ VFS 运行时 Loader DLL
 │       └── src/             # 文件 Hook、注册表 Hook、进程 Hook、VFS 运行时
 └── tests/
-    └── EniBox.Tests/        # xUnit 测试项目 (90+ 用例)
+    ├── EniBox.Tests/        # xUnit 测试项目 (161 用例)
+    └── TestHelpers/         # C# 测试辅助程序 (FileChecker, RegChecker, SubProcHost/Child)
 ```
 
 ## 技术架构
@@ -87,9 +89,10 @@ EniBox/
 
 运行时：
 
-1. **Loader 初始化** — 从 .enibox 节区提取 VFS 数据和 Loader DLL
+1. **Loader 初始化** — 从 .enibox 节区提取 VFS 数据和 Loader DLL（CRC32 校验 + 随机子目录隔离）
 2. **安装 Hook** — Hook 文件 API (CreateFileW/NtCreateFile 等)、注册表 API、进程 API
 3. **透明重定向** — 目标程序访问文件时自动重定向到 VFS
+4. **子进程注入** — 创建子进程时自动注入 Loader（三级策略: APC → NtCreateThreadEx → CreateRemoteThread）
 
 ## 版本变更
 

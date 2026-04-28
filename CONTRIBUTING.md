@@ -63,7 +63,7 @@ dotnet test tests/EniBox.Tests/EniBox.Tests.csproj
 
 ```
 tests/EniBox.Tests/
-├── TestInfrastructure/    # 测试基础设施
+├── TestInfrastructure/    # 测试基础设施 (E2ETestBase, ProcessRunner, TestExeBuilder, SynchronousProgress 等)
 ├── Config/                # 配置模型测试
 ├── Vfs/                   # VFS 数据结构测试
 ├── PackService/           # 封包服务测试
@@ -73,7 +73,13 @@ tests/EniBox.Tests/
 ├── Registry/              # 注册表验证测试
 ├── Injection/             # 注入验证测试
 ├── Gui/                   # GUI 验证测试
+├── E2E/                   # 端到端测试 (封包+运行+VFS+注册表+子进程+特殊路径)
 └── Integration/           # 集成测试
+tests/TestHelpers/         # C# 测试辅助程序
+├── FileChecker/           # Win32 文件读取验证
+├── RegChecker/            # 注册表虚拟化验证
+├── SubProcHost/           # 子进程宿主
+└── SubProcChild/          # 子进程 VFS 验证
 ```
 
 ### 测试约定

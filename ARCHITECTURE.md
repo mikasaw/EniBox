@@ -97,7 +97,7 @@ VFS 运行时组件：
 | hook_filemapping | 文件映射 Hook |
 | hook_registry | 注册表 Hook 安装 |
 | hook_process | 进程创建 Hook + DLL 注入 |
-| inject | 远程 DLL 注入 (CreateRemoteThread) |
+| inject | 远程 DLL 注入 (三级策略: QueueUserAPC → NtCreateThreadEx → CreateRemoteThread) |
 
 ## 数据流
 
@@ -125,7 +125,8 @@ PeTool.Save ──→ 输出EXE
   ▼
 Loader DllMain (DLL_PROCESS_ATTACH)
   ├── 从.enibox节区提取VFS数据和Loader DLL
-  ├── 写入Loader DLL到临时目录
+  ├── 写入Loader DLL到临时目录 (%TEMP%\EniBox-<pid>-<rnd>/)
+  ├── CRC32写后回读完整性校验
   ├── LoadLibrary加载Loader DLL
   │
   ▼
@@ -140,7 +141,7 @@ Loader初始化
   ├── CreateFileW("data.bin") ──→ VFS查找 ──→ 返回VFS句柄
   ├── ReadFile(VFS句柄) ──→ VFS数据读取
   ├── RegOpenKeyEx ──→ 虚拟注册表查找
-  └── CreateProcess ──→ 挂起创建 ──→ 注入Loader ──→ 恢复执行
+  └── CreateProcess ──→ 挂起创建 ──→ 三级注入(APC/NtCreateThreadEx/CreateRemoteThread) ──→ 恢复执行
 ```
 
 ## 错误码体系
@@ -152,7 +153,8 @@ Loader初始化
 | 3000-3999 | VFS | VfsBuildFailed=3001 |
 | 4000-4999 | 压缩 | CompressionFailed=4001 |
 | 5000-5999 | PE 修改 | WriteFailed=5003, ImportMergeFailed=5002 |
-| 6000-6999 | Loader | LoaderNotFound=6001 |
+| 6000-6999 | Loader | LoaderNotFound=6001, ApcFail=6607, NtCreateFail=6608 |
+| 6800-6899 | 提取 | Security=6801, Integrity=6802, WriteFail=6803 |
 | 9000-9999 | 通用 | OperationCancelled=9001, UnexpectedError=9999 |
 
 ## 二进制格式

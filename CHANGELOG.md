@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-28
+
+### Added
+- 端到端封包测试 (FullPackFlowTests): fc.exe 完整封包 + 含依赖封包
+- 端到端运行测试 (PackedExeRunTests): 封包 EXE 启动并正常退出
+- 端到端 VFS 文件访问透传测试 (VfsRuntimeAccessTests)
+- 端到端 Loader DLL 提取测试 (LoaderExtractionTests)
+- 端到端特殊路径测试: 空格路径 + 中文路径 (SpecialPathTests)
+- 端到端重复封包测试 (RepackTests)
+- 端到端多文件压力测试: 10 个依赖文件封包 (MultiFileStressTests)
+- 运行时 E2E 测试: FileChecker (Win32 文件读取) + RegChecker (注册表虚拟化) + SubProcHost/Child (子进程)
+- C# 测试辅助程序: FileChecker, RegChecker, SubProcHost, SubProcChild
+- PeTool 完整流水线 E2E 测试 (RealPeToolE2ETests): AddSection/GetInfo/Open/TLS/ImportMerge/Save
+- P0-02 DLL 提取安全加固: 随机子目录隔离、FILE_FLAG_WRITE_THROUGH、CRC32 写后回读校验
+- P0-03 三级注入策略: QueueUserAPC → NtCreateThreadEx → CreateRemoteThread 自动回退
+- 新增错误码: INJECT_ERR_APC_FAIL(6607), INJECT_ERR_NTCREATE_FAIL(6608), EXTRACT_ERR_SECURITY(6801), EXTRACT_ERR_INTEGRITY(6802), EXTRACT_ERR_WRITE_FAIL(6803)
+- SynchronousProgress<T> 测试基础设施: 解决 xunit 无 SynchronizationContext 下 Progress<T> 异步投递问题
+- E2ETestBase, ProcessRunner, TestExeBuilder, TempFileHelper 测试基础设施
+- 高级功能完整性验证测试 (15 个代码审查用例)
+
+### Changed
+- VfsBuilder O(n^2) 目录索引查找优化为 Dictionary O(1)
+- VfsBuilder 根节点 ParentIndex 处理: TryGetValue 替代直接索引，避免 KeyNotFoundException
+- Inject_LoadDll 内部调用 Inject_DetectBestMethod + Inject_LoadDllEx，子进程注入自动使用三级策略
+- loader_main.c 添加 #include <strsafe.h> (StringCchCopyW 依赖)
+
+### Fixed
+- VfsBuilder 根节点 (Name=="") 不在 dirIndexMap 中导致 KeyNotFoundException
+- Progress<T> 在 xunit 测试中异步投递导致 ProgressCallback 断言失败
+
 ## [0.4.0] - 2026-04-28
 
 ### Added
