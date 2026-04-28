@@ -85,6 +85,13 @@
 #define INJECT_ERR_NO_MODULE     6604
 #define INJECT_ERR_NO_FUNC       6605
 #define INJECT_ERR_THREAD_FAIL   6606
+#define INJECT_ERR_APC_FAIL      6607
+#define INJECT_ERR_NTCREATE_FAIL 6608
+
+/* Loader extraction errors (6801-6899) */
+#define EXTRACT_ERR_SECURITY     6801
+#define EXTRACT_ERR_INTEGRITY    6802
+#define EXTRACT_ERR_WRITE_FAIL   6803
 
 /* Registry hook errors (6701-6799) */
 #define REG_ERR_INVALID_PARAM    6701

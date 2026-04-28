@@ -3,6 +3,7 @@
 #include "hook_manager.h"
 #include "hook_process.h"
 #include <windows.h>
+#include <strsafe.h>
 #include <stdio.h>
 
 static uint8_t* g_vfs_base = NULL;
@@ -11,7 +12,19 @@ static BOOL g_initialized = FALSE;
 static uint32_t g_original_entry_rva = 0;
 static wchar_t g_loader_path[MAX_PATH] = {0};
 static wchar_t g_extracted_loader_path[MAX_PATH] = {0};
+static wchar_t g_extracted_loader_dir[MAX_PATH] = {0};
 static BOOL g_loader_extracted = FALSE;
+
+static uint32_t ComputeCrc32(const uint8_t* data, uint32_t size) {
+    uint32_t crc = 0xFFFFFFFF;
+    for (uint32_t i = 0; i < size; i++) {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++) {
+            crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
+        }
+    }
+    return crc ^ 0xFFFFFFFF;
+}
 
 static uint8_t* FindEniboxSection(uint32_t* section_size) {
     HMODULE hModule = GetModuleHandleW(NULL);
@@ -46,22 +59,48 @@ static uint8_t* FindEniboxSection(uint32_t* section_size) {
 static BOOL ExtractEmbeddedLoader(const uint8_t* loader_data, uint32_t loader_size) {
     if (!loader_data || loader_size == 0) return FALSE;
 
-    /* Validate it's a PE DLL (MZ header) */
     if (loader_data[0] != 'M' || loader_data[1] != 'Z') return FALSE;
 
-    /* Generate temp file path: %TEMP%\EniBox.Loader.<pid>.dll */
+    uint32_t expected_crc = ComputeCrc32(loader_data, loader_size);
+
     wchar_t temp_dir[MAX_PATH];
     DWORD temp_len = GetTempPathW(MAX_PATH, temp_dir);
     if (temp_len == 0 || temp_len >= MAX_PATH) return FALSE;
 
     DWORD pid = GetCurrentProcessId();
-    _snwprintf_s(g_extracted_loader_path, MAX_PATH, _TRUNCATE,
-                 L"%sEniBox.Loader.%u.dll", temp_dir, pid);
+    DWORD rnd = (GetTickCount() ^ pid) & 0xFFFF;
 
-    /* Write the DLL to the temp file */
+    _snwprintf_s(g_extracted_loader_dir, MAX_PATH, _TRUNCATE,
+                 L"%sEniBox-%u-%u", temp_dir, pid, rnd);
+
+    {
+        /* Create secure temp directory with restricted DACL */
+        SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), NULL, FALSE};
+        BOOL dir_created = CreateDirectoryW(g_extracted_loader_dir, &sa);
+
+        if (!dir_created && GetLastError() != ERROR_ALREADY_EXISTS) {
+            /* Fallback: try LOCALAPPDATA */
+            if (SUCCEEDED(StringCchCopyW(g_extracted_loader_dir, MAX_PATH, temp_dir))) {
+                _snwprintf_s(g_extracted_loader_dir + wcslen(g_extracted_loader_dir),
+                             MAX_PATH - wcslen(g_extracted_loader_dir), _TRUNCATE,
+                             L"EniBox-%u-%u\\", pid, rnd);
+                CreateDirectoryW(g_extracted_loader_dir, NULL);
+            }
+        }
+    }
+
+    _snwprintf_s(g_extracted_loader_path, MAX_PATH, _TRUNCATE,
+                 L"%s\\EniBox.Loader.%u.%u.dll", g_extracted_loader_dir, pid, rnd);
+
     HANDLE hFile = CreateFileW(g_extracted_loader_path,
-        GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) return FALSE;
+        GENERIC_WRITE, 0, NULL, CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        hFile = CreateFileW(g_extracted_loader_path,
+            GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+        if (hFile == INVALID_HANDLE_VALUE) return FALSE;
+    }
 
     DWORD bytes_written;
     BOOL success = WriteFile(hFile, loader_data, loader_size, &bytes_written, NULL);
@@ -71,6 +110,32 @@ static BOOL ExtractEmbeddedLoader(const uint8_t* loader_data, uint32_t loader_si
         DeleteFileW(g_extracted_loader_path);
         g_extracted_loader_path[0] = 0;
         return FALSE;
+    }
+
+    {
+        /* Integrity verification: re-read and check CRC32 */
+        HANDLE hVerify = CreateFileW(g_extracted_loader_path,
+            GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+            FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+        if (hVerify != INVALID_HANDLE_VALUE) {
+            uint8_t* verify_buf = (uint8_t*)HeapAlloc(GetProcessHeap(), 0, loader_size);
+            if (verify_buf) {
+                DWORD bytes_read = 0;
+                if (ReadFile(hVerify, verify_buf, loader_size, &bytes_read, NULL)
+                    && bytes_read == loader_size) {
+                    uint32_t actual_crc = ComputeCrc32(verify_buf, loader_size);
+                    if (actual_crc != expected_crc) {
+                        HeapFree(GetProcessHeap(), 0, verify_buf);
+                        CloseHandle(hVerify);
+                        DeleteFileW(g_extracted_loader_path);
+                        g_extracted_loader_path[0] = 0;
+                        return FALSE;
+                    }
+                }
+                HeapFree(GetProcessHeap(), 0, verify_buf);
+            }
+            CloseHandle(hVerify);
+        }
     }
 
     g_loader_extracted = TRUE;
@@ -83,13 +148,14 @@ static BOOL ExtractEmbeddedLoader(const uint8_t* loader_data, uint32_t loader_si
  */
 static void CleanupExtractedLoader(void) {
     if (g_loader_extracted && g_extracted_loader_path[0] != 0) {
-        /* Delay deletion - the DLL may still be in use.
-         * MoveFileEx with MOVEFILE_DELAY_UNTIL_REBOOT ensures cleanup
-         * even if we can't delete it now. */
         MoveFileExW(g_extracted_loader_path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
         DeleteFileW(g_extracted_loader_path);
         g_extracted_loader_path[0] = 0;
         g_loader_extracted = FALSE;
+    }
+    if (g_extracted_loader_dir[0] != 0) {
+        RemoveDirectoryW(g_extracted_loader_dir);
+        g_extracted_loader_dir[0] = 0;
     }
 }
 

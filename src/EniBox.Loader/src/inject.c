@@ -1,27 +1,143 @@
 #include "inject.h"
+#include "loader_errors.h"
 #include <stdlib.h>
 
-/* Forward declaration for IsWow64Process2 (available on Windows 10+) */
 typedef BOOL (WINAPI *IsWow64Process2_t)(HANDLE, USHORT*, USHORT*);
 
-int32_t Inject_LoadDll(HANDLE hProcess, const wchar_t* dll_path) {
-    if (!hProcess || !dll_path) return -1;
+typedef LONG (NTAPI *NtCreateThreadEx_t)(
+    PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess,
+    PVOID ObjectAttributes, HANDLE ProcessHandle,
+    PVOID StartRoutine, PVOID Argument,
+    ULONG CreateFlags, SIZE_T ZeroBits, SIZE_T StackSize,
+    SIZE_T MaximumStackSize, PVOID AttributeList);
+
+static int32_t InjectVia_CreateRemoteThread(HANDLE hProcess, const wchar_t* dll_path) {
     size_t path_size = (wcslen(dll_path) + 1) * sizeof(wchar_t);
     LPVOID remote_path = VirtualAllocEx(hProcess, NULL, path_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!remote_path) return -2;
+    if (!remote_path) return INJECT_ERR_NO_MEMORY;
     if (!WriteProcessMemory(hProcess, remote_path, dll_path, path_size, NULL)) {
-        VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return -3;
+        VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE);
+        return INJECT_ERR_WRITE_FAIL;
     }
     HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
-    if (!hK32) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return -4; }
+    if (!hK32) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return INJECT_ERR_NO_MODULE; }
     FARPROC pLoadLib = GetProcAddress(hK32, "LoadLibraryW");
-    if (!pLoadLib) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return -5; }
+    if (!pLoadLib) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return INJECT_ERR_NO_FUNC; }
     HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)pLoadLib, remote_path, 0, NULL);
-    if (!hThread) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return -6; }
+    if (!hThread) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return INJECT_ERR_THREAD_FAIL; }
     WaitForSingleObject(hThread, 5000);
     CloseHandle(hThread);
     VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE);
     return 0;
+}
+
+static int32_t InjectVia_QueueUserAPC(HANDLE hProcess, const wchar_t* dll_path) {
+    size_t path_size = (wcslen(dll_path) + 1) * sizeof(wchar_t);
+    LPVOID remote_path = VirtualAllocEx(hProcess, NULL, path_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!remote_path) return INJECT_ERR_NO_MEMORY;
+    if (!WriteProcessMemory(hProcess, remote_path, dll_path, path_size, NULL)) {
+        VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE);
+        return INJECT_ERR_WRITE_FAIL;
+    }
+    HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
+    if (!hK32) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return INJECT_ERR_NO_MODULE; }
+    FARPROC pLoadLib = GetProcAddress(hK32, "LoadLibraryW");
+    if (!pLoadLib) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return INJECT_ERR_NO_FUNC; }
+
+    DWORD result = QueueUserAPC((PAPCFUNC)pLoadLib, hProcess, (ULONG_PTR)remote_path);
+    if (result == 0) {
+        VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE);
+        return INJECT_ERR_APC_FAIL;
+    }
+
+    OutputDebugStringW(L"[EniBox] InjectVia_QueueUserAPC: queued successfully");
+    return 0;
+}
+
+static int32_t InjectVia_NtCreateThreadEx(HANDLE hProcess, const wchar_t* dll_path) {
+    size_t path_size = (wcslen(dll_path) + 1) * sizeof(wchar_t);
+    LPVOID remote_path = VirtualAllocEx(hProcess, NULL, path_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!remote_path) return INJECT_ERR_NO_MEMORY;
+    if (!WriteProcessMemory(hProcess, remote_path, dll_path, path_size, NULL)) {
+        VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE);
+        return INJECT_ERR_WRITE_FAIL;
+    }
+    HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
+    if (!hK32) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return INJECT_ERR_NO_MODULE; }
+    FARPROC pLoadLib = GetProcAddress(hK32, "LoadLibraryW");
+    if (!pLoadLib) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return INJECT_ERR_NO_FUNC; }
+
+    HMODULE hNtDll = GetModuleHandleW(L"ntdll.dll");
+    if (!hNtDll) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return INJECT_ERR_NO_MODULE; }
+
+    NtCreateThreadEx_t pNtCreateThreadEx = (NtCreateThreadEx_t)
+        GetProcAddress(hNtDll, "NtCreateThreadEx");
+    if (!pNtCreateThreadEx) { VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE); return INJECT_ERR_NTCREATE_FAIL; }
+
+    HANDLE hThread = NULL;
+    LONG status = pNtCreateThreadEx(&hThread, THREAD_ALL_ACCESS, NULL, hProcess,
+        (PVOID)pLoadLib, remote_path, 0, 0, 0, 0, NULL);
+    if (status != 0 || !hThread) {
+        VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE);
+        return INJECT_ERR_NTCREATE_FAIL;
+    }
+
+    WaitForSingleObject(hThread, 5000);
+    CloseHandle(hThread);
+    VirtualFreeEx(hProcess, remote_path, 0, MEM_RELEASE);
+
+    OutputDebugStringW(L"[EniBox] InjectVia_NtCreateThreadEx: created thread successfully");
+    return 0;
+}
+
+InjectMethod Inject_DetectBestMethod(HANDLE hProcess) {
+    /* APC is least detectable but requires target to have alertable threads */
+    /* For suspended processes (our use case), APC works well */
+    if (hProcess != NULL) {
+        return INJECT_METHOD_APC;
+    }
+    return INJECT_METHOD_CREATE_REMOTE_THREAD;
+}
+
+int32_t Inject_LoadDllEx(HANDLE hProcess, const wchar_t* dll_path, InjectMethod preferred_method) {
+    if (!hProcess || !dll_path) return INJECT_ERR_INVALID_PARAM;
+
+    int32_t result = -1;
+
+    switch (preferred_method) {
+    case INJECT_METHOD_APC:
+        result = InjectVia_QueueUserAPC(hProcess, dll_path);
+        if (result == 0) {
+            OutputDebugStringW(L"[EniBox] Injection succeeded via QueueUserAPC");
+            return 0;
+        }
+        OutputDebugStringW(L"[EniBox] APC injection failed, falling back to NtCreateThreadEx");
+        result = InjectVia_NtCreateThreadEx(hProcess, dll_path);
+        if (result == 0) {
+            OutputDebugStringW(L"[EniBox] Injection succeeded via NtCreateThreadEx");
+            return 0;
+        }
+        OutputDebugStringW(L"[EniBox] NtCreateThreadEx failed, falling back to CreateRemoteThread");
+        return InjectVia_CreateRemoteThread(hProcess, dll_path);
+
+    case INJECT_METHOD_NT_CREATE_THREAD:
+        result = InjectVia_NtCreateThreadEx(hProcess, dll_path);
+        if (result == 0) {
+            OutputDebugStringW(L"[EniBox] Injection succeeded via NtCreateThreadEx");
+            return 0;
+        }
+        OutputDebugStringW(L"[EniBox] NtCreateThreadEx failed, falling back to CreateRemoteThread");
+        return InjectVia_CreateRemoteThread(hProcess, dll_path);
+
+    case INJECT_METHOD_CREATE_REMOTE_THREAD:
+    default:
+        return InjectVia_CreateRemoteThread(hProcess, dll_path);
+    }
+}
+
+int32_t Inject_LoadDll(HANDLE hProcess, const wchar_t* dll_path) {
+    InjectMethod method = Inject_DetectBestMethod(hProcess);
+    return Inject_LoadDllEx(hProcess, dll_path, method);
 }
 
 BOOL Inject_ArchitectureMatches(HANDLE hProcess, BOOL is_target_64bit) {
@@ -30,12 +146,8 @@ BOOL Inject_ArchitectureMatches(HANDLE hProcess, BOOL is_target_64bit) {
     is_current_64bit = TRUE;
 #endif
 
-    /* If no process handle, fall back to simple comparison */
     if (!hProcess) return (is_current_64bit == is_target_64bit);
 
-    /* Use IsWow64Process2 (Windows 10+) for accurate detection.
-     * This correctly handles WoW64 scenarios where a 32-bit process
-     * runs on a 64-bit system. */
     HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
     if (hK32) {
         IsWow64Process2_t pIsWow64Process2 = (IsWow64Process2_t)
@@ -44,14 +156,10 @@ BOOL Inject_ArchitectureMatches(HANDLE hProcess, BOOL is_target_64bit) {
             USHORT processMachine = IMAGE_FILE_MACHINE_UNKNOWN;
             USHORT nativeMachine = IMAGE_FILE_MACHINE_UNKNOWN;
             if (pIsWow64Process2(hProcess, &processMachine, &nativeMachine)) {
-                /* processMachine == IMAGE_FILE_MACHINE_UNKNOWN means native process
-                 * (not running under WoW64) */
                 if (processMachine == IMAGE_FILE_MACHINE_UNKNOWN) {
-                    /* Native process - use nativeMachine to determine architecture */
                     BOOL targetIs64 = (nativeMachine == IMAGE_FILE_MACHINE_AMD64);
                     return (is_current_64bit == targetIs64);
                 } else {
-                    /* WoW64 process - processMachine tells us the actual architecture */
                     BOOL targetIs64 = (processMachine == IMAGE_FILE_MACHINE_AMD64);
                     return (is_current_64bit == targetIs64);
                 }
@@ -59,19 +167,15 @@ BOOL Inject_ArchitectureMatches(HANDLE hProcess, BOOL is_target_64bit) {
         }
     }
 
-    /* Fallback: use IsWow64Process (available since Windows XP) */
     BOOL isWow64 = FALSE;
     IsWow64Process_t pIsWow64Process = (IsWow64Process_t)
         GetProcAddress(hK32, "IsWow64Process");
     if (pIsWow64Process && pIsWow64Process(hProcess, &isWow64)) {
         if (isWow64) {
-            /* Target is a 32-bit process running under WoW64 on 64-bit OS */
             return (is_current_64bit == FALSE);
         }
-        /* Not WoW64 - target matches OS architecture */
         return (is_current_64bit == is_target_64bit);
     }
 
-    /* Final fallback: simple comparison */
     return (is_current_64bit == is_target_64bit);
 }
