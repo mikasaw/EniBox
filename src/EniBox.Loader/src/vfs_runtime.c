@@ -3,22 +3,23 @@
 #include "vfs_handle.h"
 #include "lzma_dec.h"
 #include "crc32.h"
+#include "loader_errors.h"
 #include <stdlib.h>
 #include <string.h>
 
 static VFS_CONTEXT g_vfs_ctx = {0};
 
 int32_t VFS_Initialize(uint8_t* section_base, uint32_t section_size) {
-    if (!section_base || section_size < sizeof(VFS_HEADER)) return -1;
+    if (!section_base || section_size < sizeof(VFS_HEADER)) return VFS_ERR_INVALID_PARAM;
     VFS_HEADER* header = (VFS_HEADER*)section_base;
-    if (header->magic != VFS_MAGIC) return -2;
-    if (header->version < VFS_VERSION) return -3;
+    if (header->magic != VFS_MAGIC) return VFS_ERR_INVALID_MAGIC;
+    if (header->version < VFS_VERSION) return VFS_ERR_VERSION;
 
     uint32_t saved_checksum = header->checksum;
     header->checksum = 0;
     uint32_t computed = CRC32_Compute(section_base, section_size);
     header->checksum = saved_checksum;
-    if (computed != saved_checksum) return -4;
+    if (computed != saved_checksum) return VFS_ERR_CHECKSUM;
 
     g_vfs_ctx.header = header;
     g_vfs_ctx.data_region = section_base + header->data_offset;
@@ -29,11 +30,11 @@ int32_t VFS_Initialize(uint8_t* section_base, uint32_t section_size) {
 
     InitializeCriticalSection(&g_vfs_ctx.lock);
     int32_t result = VFS_HashTableBuild(&g_vfs_ctx);
-    if (result != 0) { DeleteCriticalSection(&g_vfs_ctx.lock); return -5; }
+    if (result != 0) { DeleteCriticalSection(&g_vfs_ctx.lock); return VFS_ERR_HASHTABLE_INIT; }
     result = VFS_HandleTableInit();
-    if (result != 0) { VFS_HashTableFree(&g_vfs_ctx); DeleteCriticalSection(&g_vfs_ctx.lock); return -6; }
+    if (result != 0) { VFS_HashTableFree(&g_vfs_ctx); DeleteCriticalSection(&g_vfs_ctx.lock); return VFS_ERR_HANDLE_INIT; }
     g_vfs_ctx.initialized = TRUE;
-    return 0;
+    return LOADER_OK;
 }
 
 void VFS_Finalize(void) {
@@ -63,9 +64,9 @@ VFS_FILE_ENTRY* VFS_LookupFileW(const wchar_t* path) {
 }
 
 int32_t VFS_ReadFile(VFS_FILE_HANDLE* handle, void* buffer, uint32_t bytes_to_read, uint32_t* bytes_read) {
-    if (!handle || !buffer || !bytes_read) return -1;
+    if (!handle || !buffer || !bytes_read) return VFS_ERR_INVALID_PARAM;
     VFS_CONTEXT* ctx = VFS_GetContext();
-    if (!ctx) return -2;
+    if (!ctx) return VFS_ERR_NULL_CONTEXT;
     VFS_FILE_ENTRY* file = &ctx->files[handle->file_index];
     if (file->is_compressed && !handle->decompressed) {
         int32_t result = VFS_DecompressFile(handle);
@@ -95,19 +96,19 @@ uint32_t VFS_GetFileSize(VFS_FILE_HANDLE* handle) {
 }
 
 int32_t VFS_DecompressFile(VFS_FILE_HANDLE* handle) {
-    if (!handle) return -1;
+    if (!handle) return VFS_ERR_INVALID_PARAM;
     VFS_CONTEXT* ctx = VFS_GetContext();
-    if (!ctx) return -2;
+    if (!ctx) return VFS_ERR_NULL_CONTEXT;
     VFS_FILE_ENTRY* file = &ctx->files[handle->file_index];
-    if (!file->is_compressed) return 0;
-    if (handle->decompressed) return 0;
+    if (!file->is_compressed) return LOADER_OK;
+    if (handle->decompressed) return LOADER_OK;
     handle->decompressed = (uint8_t*)VirtualAlloc(NULL, file->original_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!handle->decompressed) return -3;
+    if (!handle->decompressed) return VFS_ERR_NO_MEMORY;
     handle->decompressed_size = file->original_size;
     uint32_t output_size = file->original_size;
     int32_t result = LzmaDec_Decompress(ctx->data_region + file->data_offset, file->data_size, handle->decompressed, &output_size);
-    if (result != 0) { VirtualFree(handle->decompressed, 0, MEM_RELEASE); handle->decompressed = NULL; handle->decompressed_size = 0; return -4; }
-    return 0;
+    if (result != 0) { VirtualFree(handle->decompressed, 0, MEM_RELEASE); handle->decompressed = NULL; handle->decompressed_size = 0; return VFS_ERR_DECOMPRESS; }
+    return LOADER_OK;
 }
 
 void VFS_NormalizePath(char* path, uint32_t size) {

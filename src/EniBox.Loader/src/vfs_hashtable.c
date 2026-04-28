@@ -1,5 +1,6 @@
 #include "vfs_hashtable.h"
 #include "vfs_runtime.h"
+#include "loader_errors.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,18 +14,18 @@ uint32_t VFS_Fnv1aHash(const char* data, uint32_t length) {
 }
 
 int32_t VFS_HashTableBuild(VFS_CONTEXT* ctx) {
-    if (!ctx || !ctx->header || !ctx->files) return -1;
+    if (!ctx || !ctx->header || !ctx->files) return VFS_ERR_HT_INVALID_CTX;
     uint32_t min_buckets = ctx->header->file_count * 2;
     uint32_t buckets = 1;
     while (buckets < min_buckets) buckets <<= 1;
     ctx->hash_buckets = buckets;
     ctx->hash_table = (VFS_HASH_ENTRY**)calloc(buckets, sizeof(VFS_HASH_ENTRY*));
-    if (!ctx->hash_table) return -2;
+    if (!ctx->hash_table) return VFS_ERR_HT_NO_TABLE;
 
     for (uint32_t i = 0; i < ctx->header->file_count; i++) {
         VFS_FILE_ENTRY* file = &ctx->files[i];
         VFS_HASH_ENTRY* entry = (VFS_HASH_ENTRY*)calloc(1, sizeof(VFS_HASH_ENTRY));
-        if (!entry) return -3;
+        if (!entry) return VFS_ERR_HT_NO_ENTRY;
 
         const char* file_name = ctx->string_pool + file->name_offset;
         char full_path[260] = {0};
@@ -52,7 +53,7 @@ int32_t VFS_HashTableBuild(VFS_CONTEXT* ctx) {
         entry->next = ctx->hash_table[bucket];
         ctx->hash_table[bucket] = entry;
     }
-    return 0;
+    return LOADER_OK;
 }
 
 VFS_HASH_ENTRY* VFS_HashTableLookup(VFS_CONTEXT* ctx, const char* path) {

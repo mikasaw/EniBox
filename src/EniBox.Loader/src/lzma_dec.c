@@ -9,6 +9,7 @@
  */
 
 #include "lzma_dec.h"
+#include "loader_errors.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -225,8 +226,8 @@ static int LzmaDec_DecodeReal(CLzmaProb* probs, uint32_t state,
 
 int32_t LzmaDec_Decompress(const uint8_t* compressed, uint32_t compressed_size,
                              uint8_t* output, uint32_t* output_size) {
-    if (!compressed || !output || !output_size) return -1;
-    if (compressed_size < RC_INIT_SIZE + 8) return -2;
+    if (!compressed || !output || !output_size) return LZMA_ERR_INVALID_PARAM;
+    if (compressed_size < RC_INIT_SIZE + 8) return LZMA_ERR_DATA_TOO_SHORT;
 
     /* Parse header: [5 bytes props] [8 bytes original size LE] [data...] */
     const uint8_t* props = compressed;
@@ -238,9 +239,10 @@ int32_t LzmaDec_Decompress(const uint8_t* compressed, uint32_t compressed_size,
     for (int i = 0; i < 8; i++)
         origSize |= (uint64_t)compressed[RC_INIT_SIZE + i] << (8 * i);
 
-    if (origSize > *output_size) return -3;
+    if (origSize > *output_size) return LZMA_ERR_SIZE_MISMATCH;
 
     /* Validate properties byte */
+    if (props[0] >= 9 * 5 * 5) return LZMA_ERR_INVALID_PROPS; Validate properties byte */
     if (props[0] >= 9 * 5 * 5) return -4;
 
     /* Setup range decoder */
