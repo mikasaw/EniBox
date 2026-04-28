@@ -66,6 +66,10 @@ namespace EniBox.GUI.Services
                 return off;
             }
 
+            var dirIndexMap = new Dictionary<VfsDirNode, int>();
+            for (int i = 0; i < dirs.Count; i++)
+                dirIndexMap[dirs[i]] = i;
+
             // Serialize directory entries
             var dirEntries = new VfsDirEntry[dirs.Count];
             for (int i = 0; i < dirs.Count; i++)
@@ -74,7 +78,7 @@ namespace EniBox.GUI.Services
                 dirEntries[i] = new VfsDirEntry
                 {
                     NameOffset = GetStringOffset(dir.Name),
-                    ParentIndex = dir.Parent != null ? (uint)dirs.IndexOf(dir.Parent) : VfsDirEntry.INVALID_INDEX,
+                    ParentIndex = dir.Parent != null ? (uint)dirIndexMap[dir.Parent] : VfsDirEntry.INVALID_INDEX,
                     FirstChild = VfsDirEntry.INVALID_INDEX,
                     NextSibling = VfsDirEntry.INVALID_INDEX,
                     FirstFile = VfsDirEntry.INVALID_INDEX
@@ -87,11 +91,11 @@ namespace EniBox.GUI.Services
                 var dir = dirs[i];
                 if (dir.Children.Count > 0)
                 {
-                    dirEntries[i].FirstChild = (uint)dirs.IndexOf(dir.Children[0]);
+                    dirEntries[i].FirstChild = (uint)dirIndexMap[dir.Children[0]];
                     for (int j = 0; j < dir.Children.Count - 1; j++)
                     {
-                        var childIdx = dirs.IndexOf(dir.Children[j]);
-                        var nextIdx = dirs.IndexOf(dir.Children[j + 1]);
+                        var childIdx = dirIndexMap[dir.Children[j]];
+                        var nextIdx = dirIndexMap[dir.Children[j + 1]];
                         dirEntries[childIdx].NextSibling = (uint)nextIdx;
                     }
                 }
