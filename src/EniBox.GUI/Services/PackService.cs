@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Threading;
@@ -19,7 +20,7 @@ namespace EniBox.GUI.Services
             _vfsBuilder = vfsBuilder;
         }
 
-        public async Task<PackResult> PackAsync(
+        public PackResult Pack(
             PackConfiguration config,
             IProgress<PackProgress>? progressCallback,
             CancellationToken cancellationToken)
@@ -27,9 +28,6 @@ namespace EniBox.GUI.Services
             string? tempOutputPath = null;
             try
             {
-                await Task.CompletedTask; // Ensure async behavior for cancellation support
-
-                // Stage 1: Validate input
                 ReportProgress(progressCallback, PackStage.CollectingFiles, 0, config.Files.Count, "Validating input...");
 
                 var validationError = ValidateInput(config);
@@ -38,16 +36,14 @@ namespace EniBox.GUI.Services
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Stage 2: Parse source PE
                 ReportProgress(progressCallback, PackStage.CollectingFiles, 0, config.Files.Count, "Parsing source EXE...");
 
                 var peInfo = GetPeInfo(config.SourceExePath);
                 if (peInfo == null)
-                    return new PackResult { IsSuccess = false, ErrorMessage = "Failed to parse source EXE PE structure.", ErrorCode = PackErrorCode.InvalidPe };
+                    return new PackResult { IsSuccess = false, ErrorMessage = MessageConstants.FailedParsePe, ErrorCode = PackErrorCode.InvalidPe };
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Stage 3: Build VFS
                 ReportProgress(progressCallback, PackStage.BuildingVFS, 0, config.Files.Count, "Building VFS...");
 
                 _vfsBuilder.Clear();
@@ -60,22 +56,16 @@ namespace EniBox.GUI.Services
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Stage 4: Compress data
                 ReportProgress(progressCallback, PackStage.Compressing, 0, config.Files.Count, "Compression complete.");
 
-                // Stage 5: Modify PE
                 ReportProgress(progressCallback, PackStage.ModifyingPE, 0, config.Files.Count, "Modifying PE structure...");
 
-                // Select Loader DLL based on architecture
                 var loaderData = SelectLoaderDll(peInfo.Architecture);
                 if (loaderData == null)
-                    return new PackResult { IsSuccess = false, ErrorMessage = $"Unsupported architecture: {peInfo.Architecture}. Only x86 and x64 are supported.", ErrorCode = PackErrorCode.UnsupportedArch };
+                    return new PackResult { IsSuccess = false, ErrorMessage = MessageConstants.UnsupportedArch + peInfo.Architecture + MessageConstants.ArchSupportSuffix, ErrorCode = PackErrorCode.UnsupportedArch };
 
-                // Combine VFS data + Loader DLL into section data
-                // (PeTool's stub generator prepends entry point stub + metadata)
                 var sectionData = CombineSectionData(vfsResult, loaderData);
 
-                // Apply PE modifications via PeTool DLL
                 var peError = ApplyPeModifications(config.SourceExePath, config.OutputPath, sectionData);
                 if (peError != null)
                 {
@@ -85,7 +75,6 @@ namespace EniBox.GUI.Services
 
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Stage 6: Write output
                 ReportProgress(progressCallback, PackStage.WritingOutput, config.Files.Count, config.Files.Count, "Writing output...");
 
                 var outputInfo = new FileInfo(config.OutputPath);
@@ -101,30 +90,38 @@ namespace EniBox.GUI.Services
             catch (OperationCanceledException)
             {
                 CleanupTempFile(tempOutputPath);
-                return new PackResult { IsSuccess = false, ErrorMessage = "Operation cancelled.", ErrorCode = PackErrorCode.OperationCancelled };
+                return new PackResult { IsSuccess = false, ErrorMessage = MessageConstants.OperationCancelled, ErrorCode = PackErrorCode.OperationCancelled };
             }
             catch (PackException ex)
             {
                 CleanupTempFile(tempOutputPath);
-                return new PackResult { IsSuccess = false, ErrorMessage = $"Pack error ({ex.ErrorCode}): {ex.Message}" };
+                return new PackResult { IsSuccess = false, ErrorMessage = string.Format(MessageConstants.PackErrorFormat, ex.ErrorCode, ex.Message) };
             }
             catch (Exception ex)
             {
                 CleanupTempFile(tempOutputPath);
-                return new PackResult { IsSuccess = false, ErrorMessage = $"Unexpected error: {ex.Message}", ErrorCode = PackErrorCode.UnexpectedError };
+                return new PackResult { IsSuccess = false, ErrorMessage = MessageConstants.UnexpectedError + ex.Message, ErrorCode = PackErrorCode.UnexpectedError };
             }
+        }
+
+        public Task<PackResult> PackAsync(
+            PackConfiguration config,
+            IProgress<PackProgress>? progressCallback,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(Pack(config, progressCallback, cancellationToken));
         }
 
         private static string? ValidateInput(PackConfiguration config)
         {
             if (string.IsNullOrWhiteSpace(config.SourceExePath))
-                return "Source EXE path is not specified.";
+                return MessageConstants.SourceExeNotSpecified;
 
             if (!File.Exists(config.SourceExePath))
-                return $"Source EXE file not found: {config.SourceExePath}";
+                return MessageConstants.SourceExeNotFound + config.SourceExePath;
 
             if (string.IsNullOrWhiteSpace(config.OutputPath))
-                return "Output path is not specified.";
+                return MessageConstants.OutputNotSpecified;
 
             try
             {
@@ -132,23 +129,21 @@ namespace EniBox.GUI.Services
                 if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
                     Directory.CreateDirectory(outputDir);
             }
-            catch
+            catch (Exception ex)
             {
-                return $"Output path is not writable: {config.OutputPath}";
+                Debug.WriteLine($"Output path validation failed: {ex.Message}");
+                return MessageConstants.OutputNotWritable + config.OutputPath;
             }
 
             foreach (var file in config.Files)
             {
                 if (!File.Exists(file.SourcePath))
-                    return $"Dependency file not found: {file.SourcePath}";
+                    return MessageConstants.DependencyNotFound + file.SourcePath;
             }
 
             return null;
         }
 
-        /// <summary>
-        /// Gets PE info using PeTool DLL (single source of truth, avoids duplicate parsing logic).
-        /// </summary>
         private static PeInfo? GetPeInfo(string exePath)
         {
             try
@@ -165,8 +160,9 @@ namespace EniBox.GUI.Services
                     PeToolInterop.Close(ctx);
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.WriteLine($"PeInfo parsing failed for '{exePath}': {ex.Message}");
                 return null;
             }
         }
@@ -175,8 +171,8 @@ namespace EniBox.GUI.Services
         {
             string resourceName = architecture switch
             {
-                PeArchitecture.X86 => "EniBox.Loader.x86.dll",
-                PeArchitecture.X64 => "EniBox.Loader.x64.dll",
+                PeArchitecture.X86 => PackConstants.LoaderDllX86Resource,
+                PeArchitecture.X64 => PackConstants.LoaderDllX64Resource,
                 _ => null!
             };
 
@@ -198,19 +194,13 @@ namespace EniBox.GUI.Services
             using var ms = new MemoryStream();
             using var writer = new BinaryWriter(ms);
 
-            // Write VFS size (4 bytes) - Loader uses this to find VFS data boundary
             var vfsMetadata = vfsResult.Metadata;
             var vfsDataRegion = vfsResult.DataRegion;
             uint vfsTotalSize = (uint)(vfsMetadata.Length + vfsDataRegion.Length);
             writer.Write(vfsTotalSize);
 
-            // Write VFS metadata
             writer.Write(vfsMetadata);
-
-            // Write VFS data region
             writer.Write(vfsDataRegion);
-
-            // Write Loader DLL
             writer.Write(loaderData);
 
             return ms.ToArray();
@@ -221,45 +211,39 @@ namespace EniBox.GUI.Services
             IntPtr ctx = IntPtr.Zero;
             try
             {
-                // Open the source PE file
                 int result = PeToolInterop.Open(sourcePath, out ctx);
                 if (result != 0 || ctx == IntPtr.Zero)
-                    return ($"Failed to open PE file (error {result}).", PackErrorCode.InvalidPe);
+                    return (MessageConstants.FailedOpenPe + result + ").", PackErrorCode.InvalidPe);
 
-                // Add the .enibox section with VFS + Loader data
-                const uint SECTION_CHARACTERISTICS = 0xC0000040;
-                // IMAGE_SCN_CNT_CODE | IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE
-                result = PeToolInterop.AddSection(ctx, ".enibox", sectionData, SECTION_CHARACTERISTICS);
+                result = PeToolInterop.AddSection(ctx, PackConstants.EniboxSectionName, sectionData, PackConstants.EniboxSectionCharacteristics);
                 if (result != 0)
-                    return ($"Failed to add .enibox section (error {result}).", PackErrorCode.SectionFull);
+                    return (MessageConstants.FailedAddSection + result + ").", PackErrorCode.SectionFull);
 
-                // Process TLS callbacks to ensure Loader initializes before TLS
                 result = PeToolInterop.ProcessTLS(ctx);
                 if (result != 0)
-                    return ($"Failed to process TLS callbacks (error {result}).", PackErrorCode.ImportMergeFailed);
+                    return (MessageConstants.FailedProcessTls + result + ").", PackErrorCode.ImportMergeFailed);
 
-                // Merge Loader DLL into import table so it loads before entry point
                 var importEntries = new PeToolInterop.ImportEntry[]
                 {
-                    new() { DllName = "EniBox.Loader.dll" }
+                    new() { DllName = PackConstants.LoaderDllImportName }
                 };
                 result = PeToolInterop.MergeImports(ctx, importEntries);
                 if (result != 0)
-                    return ($"Failed to merge imports (error {result}).", PackErrorCode.ImportMergeFailed);
+                    return (MessageConstants.FailedMergeImports + result + ").", PackErrorCode.ImportMergeFailed);
 
                 result = PeToolInterop.Save(ctx, outputPath);
                 if (result != 0)
-                    return ($"Failed to save modified PE (error {result}).", PackErrorCode.WriteFailed);
+                    return (MessageConstants.FailedSavePe + result + ").", PackErrorCode.WriteFailed);
 
                 return null;
             }
             catch (DllNotFoundException ex)
             {
-                return ($"PeTool DLL not found: {ex.Message}. Ensure EniBox.PeTool.dll is in the application directory.", PackErrorCode.LoaderNotFound);
+                return (MessageConstants.PeToolNotFoundPrefix + ex.Message + MessageConstants.PeToolNotFoundSuffix, PackErrorCode.LoaderNotFound);
             }
             catch (Exception ex)
             {
-                return ($"PE modification failed: {ex.Message}", PackErrorCode.UnexpectedError);
+                return (MessageConstants.PeModificationFailed + ex.Message, PackErrorCode.UnexpectedError);
             }
             finally
             {
@@ -285,7 +269,8 @@ namespace EniBox.GUI.Services
         {
             if (path != null && File.Exists(path))
             {
-                try { File.Delete(path); } catch { }
+                try { File.Delete(path); }
+                catch (Exception ex) { Debug.WriteLine($"Failed to cleanup temp file '{path}': {ex.Message}"); }
             }
         }
     }
