@@ -8,6 +8,8 @@ namespace EniBox.GUI.Services
 {
     public sealed class VfsBuilder : IVfsBuilder
     {
+        private const int LargeFileThreshold = 64 * 1024;
+        private const int StreamBufferSize = 64 * 1024;
         private class VfsDirNode
         {
             public string Name { get; set; } = string.Empty;
@@ -110,17 +112,29 @@ namespace EniBox.GUI.Services
             for (int i = 0; i < files.Count; i++)
             {
                 var file = files[i];
-                var fileData = File.ReadAllBytes(file.SourcePath);
-                totalOriginalSize += fileData.Length;
+                var fileInfo = new FileInfo(file.SourcePath);
+                var fileSize = fileInfo.Length;
+                totalOriginalSize += fileSize;
 
                 byte[] storeData;
                 uint storeSize;
                 byte isCompressed;
 
-                if (file.IsCompressed && fileData.Length > 0)
+                if (file.IsCompressed && fileSize > 0)
                 {
-                    var compressed = _compressor.Compress(fileData);
-                    if (compressed.Length < fileData.Length)
+                    byte[] compressed;
+                    if (fileSize > LargeFileThreshold)
+                    {
+                        using var fileStream = new FileStream(file.SourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, StreamBufferSize, FileOptions.SequentialScan);
+                        compressed = _compressor.CompressStream(fileStream, fileSize);
+                    }
+                    else
+                    {
+                        var fileData = File.ReadAllBytes(file.SourcePath);
+                        compressed = _compressor.Compress(fileData);
+                    }
+
+                    if (compressed.Length < fileSize)
                     {
                         storeData = compressed;
                         storeSize = (uint)compressed.Length;
@@ -128,24 +142,44 @@ namespace EniBox.GUI.Services
                     }
                     else
                     {
-                        storeData = fileData;
-                        storeSize = (uint)fileData.Length;
+                        storeData = fileSize > LargeFileThreshold ? File.ReadAllBytes(file.SourcePath) : File.ReadAllBytes(file.SourcePath);
+                        storeSize = (uint)storeData.Length;
                         isCompressed = 0;
                     }
                 }
                 else
                 {
-                    storeData = fileData;
-                    storeSize = (uint)fileData.Length;
+                    if (fileSize > LargeFileThreshold)
+                    {
+                        var dataOffset = (uint)dataStream.Position;
+                        using (var srcStream = new FileStream(file.SourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, StreamBufferSize, FileOptions.SequentialScan))
+                        {
+                            srcStream.CopyTo(dataStream);
+                        }
+                        storeData = Array.Empty<byte>();
+                        storeSize = (uint)fileSize;
+                    }
+                    else
+                    {
+                        storeData = File.ReadAllBytes(file.SourcePath);
+                        storeSize = (uint)storeData.Length;
+                    }
                     isCompressed = 0;
                 }
 
                 totalCompressedSize += storeSize;
 
-                var dataOffset = (uint)dataStream.Position;
-                dataStream.Write(storeData, 0, storeData.Length);
+                uint entryDataOffset;
+                if (storeData.Length > 0)
+                {
+                    entryDataOffset = (uint)dataStream.Position;
+                    dataStream.Write(storeData, 0, storeData.Length);
+                }
+                else
+                {
+                    entryDataOffset = (uint)(dataStream.Position - storeSize);
+                }
 
-                // Find directory index
                 var fileDir = Path.GetDirectoryName(file.VirtualPath) ?? "";
                 uint dirIndex = 0;
                 for (int d = 0; d < dirs.Count; d++)
@@ -161,9 +195,9 @@ namespace EniBox.GUI.Services
                 {
                     NameOffset = GetStringOffset(Path.GetFileName(file.VirtualPath)),
                     DirIndex = dirIndex,
-                    DataOffset = dataOffset,
+                    DataOffset = entryDataOffset,
                     DataSize = storeSize,
-                    OriginalSize = (uint)fileData.Length,
+                    OriginalSize = (uint)fileSize,
                     Attributes = (uint)file.Attributes,
                     LastWriteTime = (ulong)file.LastWriteTime.ToFileTime(),
                     IsCompressed = isCompressed,
@@ -182,11 +216,12 @@ namespace EniBox.GUI.Services
 
             // Serialize metadata
             var metadataStream = new MemoryStream();
+            VfsHeader header;
+            long headerPos;
             using (var writer = new BinaryWriter(metadataStream, Encoding.UTF8, leaveOpen: true))
             {
-                // Placeholder for VFS_HEADER (will be filled later)
-                var headerPos = metadataStream.Position;
-                var header = new VfsHeader
+                headerPos = metadataStream.Position;
+                header = new VfsHeader
                 {
                     Magic = VfsHeader.MAGIC,
                     Version = VfsHeader.CURRENT_VERSION,
@@ -195,36 +230,34 @@ namespace EniBox.GUI.Services
                 };
                 header.WriteTo(writer);
 
-                // Write directory entries
                 foreach (var de in dirEntries)
                     de.WriteTo(writer);
 
-                // Write file entries
                 foreach (var fe in fileEntries)
                     fe.WriteTo(writer);
 
-                // Write string pool
                 var poolBytes = Encoding.UTF8.GetBytes(stringPool.ToString());
                 writer.Write(poolBytes);
 
-                // Now fill in offsets
                 header.MetadataOffset = (uint)headerPos;
                 header.MetadataSize = (uint)metadataStream.Length;
-                header.DataOffset = 0; // Data region starts at offset 0 in its own buffer
+                header.DataOffset = 0;
                 header.DataSize = (uint)dataStream.Length;
+            }
 
-                // Compute CRC32 over metadata (excluding checksum field) + data
-                var metadataBytes = new byte[metadataStream.Length];
-                metadataStream.Position = 0;
-                metadataStream.Read(metadataBytes, 0, metadataBytes.Length);
+            var metadataBytes = new byte[metadataStream.Length];
+            metadataStream.Position = 0;
+            metadataStream.Read(metadataBytes, 0, metadataBytes.Length);
 
-                // CRC32 over all metadata + data
-                var crcData = new byte[metadataBytes.Length + dataStream.Length];
-                Array.Copy(metadataBytes, crcData, metadataBytes.Length);
-                Array.Copy(dataStream.ToArray(), 0, crcData, metadataBytes.Length, dataStream.Length);
-                header.Checksum = Crc32.Compute(crcData);
+            var dataRegion = dataStream.ToArray();
 
-                // Rewrite header with correct values
+            uint crc = Crc32.StartPartial();
+            crc = Crc32.ContinueCompute(crc, metadataBytes);
+            crc = Crc32.ContinueCompute(crc, dataRegion);
+            header.Checksum = Crc32.FinishPartial(crc);
+
+            using (var writer = new BinaryWriter(metadataStream, Encoding.UTF8, leaveOpen: true))
+            {
                 metadataStream.Position = headerPos;
                 header.WriteTo(writer);
             }
@@ -236,7 +269,7 @@ namespace EniBox.GUI.Services
             return new VfsBuildResult
             {
                 Metadata = finalMetadata,
-                DataRegion = dataStream.ToArray(),
+                DataRegion = dataRegion,
                 FileCount = files.Count,
                 DirCount = dirs.Count,
                 TotalOriginalSize = totalOriginalSize,

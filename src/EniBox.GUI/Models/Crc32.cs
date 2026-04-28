@@ -39,5 +39,24 @@ namespace EniBox.GUI.Models
             }
             return crc ^ 0xFFFFFFFF;
         }
+
+        public static uint ContinueCompute(uint crc, ReadOnlySpan<byte> data)
+        {
+            for (int i = 0; i < data.Length; i++)
+            {
+                crc = Table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+            }
+            return crc;
+        }
+
+        public static uint StartPartial()
+        {
+            return 0xFFFFFFFF;
+        }
+
+        public static uint FinishPartial(uint crc)
+        {
+            return crc ^ 0xFFFFFFFF;
+        }
     }
 }
