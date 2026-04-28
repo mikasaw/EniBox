@@ -78,7 +78,7 @@ namespace EniBox.GUI.Services
                 dirEntries[i] = new VfsDirEntry
                 {
                     NameOffset = GetStringOffset(dir.Name),
-                    ParentIndex = dir.Parent != null ? (uint)dirIndexMap[dir.Parent] : VfsDirEntry.INVALID_INDEX,
+                    ParentIndex = dir.Parent != null && dirIndexMap.TryGetValue(dir.Parent, out var parentIdx) ? (uint)parentIdx : VfsDirEntry.INVALID_INDEX,
                     FirstChild = VfsDirEntry.INVALID_INDEX,
                     NextSibling = VfsDirEntry.INVALID_INDEX,
                     FirstFile = VfsDirEntry.INVALID_INDEX
