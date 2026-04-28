@@ -1,7 +1,9 @@
 using System;
+using EniBox.GUI;
 using EniBox.GUI.Models;
 using EniBox.GUI.Services;
 using EniBox.Tests.TestInfrastructure;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -9,12 +11,16 @@ namespace EniBox.Tests.Cli;
 
 public class CliParameterTests : VerificationTestBase
 {
+    private static readonly IServiceProvider ServiceProvider = new ServiceCollection()
+        .AddEniBoxServices()
+        .BuildServiceProvider();
+
     public CliParameterTests(ITestOutputHelper output) : base(output) { }
     
     [Fact]
     public void CliRunner_CanBeInstantiated()
     {
-        var cli = new CliRunner();
+        var cli = new CliRunner(ServiceProvider);
         Assert.NotNull(cli);
         Logger.Success("✓ CliRunner可实例化");
     }
@@ -22,7 +28,7 @@ public class CliParameterTests : VerificationTestBase
     [Fact]
     public void CliRunner_MissingSource_ReturnsNonZeroExitCode()
     {
-        var cli = new CliRunner();
+        var cli = new CliRunner(ServiceProvider);
         var exitCode = cli.Run(new[] { "--output", "out.exe" });
         
         Assert.NotEqual(0, exitCode);
@@ -32,7 +38,7 @@ public class CliParameterTests : VerificationTestBase
     [Fact]
     public void CliRunner_MissingOutput_ReturnsNonZeroExitCode()
     {
-        var cli = new CliRunner();
+        var cli = new CliRunner(ServiceProvider);
         var exitCode = cli.Run(new[] { "--source", "app.exe" });
         
         Assert.NotEqual(0, exitCode);
@@ -42,7 +48,7 @@ public class CliParameterTests : VerificationTestBase
     [Fact]
     public void CliRunner_Help_ReturnsZeroExitCode()
     {
-        var cli = new CliRunner();
+        var cli = new CliRunner(ServiceProvider);
         var exitCode = cli.Run(new[] { "--help" });
         
         Assert.Equal(0, exitCode);
@@ -52,7 +58,7 @@ public class CliParameterTests : VerificationTestBase
     [Fact]
     public void CliRunner_NoArgs_ReturnsNonZeroExitCode()
     {
-        var cli = new CliRunner();
+        var cli = new CliRunner(ServiceProvider);
         var exitCode = cli.Run(Array.Empty<string>());
         
         Assert.NotEqual(0, exitCode);
@@ -63,6 +69,9 @@ public class CliParameterTests : VerificationTestBase
 public class CliParameterOptionalTests : VerificationTestBase, IDisposable
 {
     private readonly TempFileHelper _tempFiles;
+    private static readonly IServiceProvider ServiceProvider = new ServiceCollection()
+        .AddEniBoxServices()
+        .BuildServiceProvider();
     
     public CliParameterOptionalTests(ITestOutputHelper output) : base(output)
     {
@@ -72,7 +81,7 @@ public class CliParameterOptionalTests : VerificationTestBase, IDisposable
     [Fact]
     public void CliRunner_NonExistentSource_ReturnsNonZeroExitCode()
     {
-        var cli = new CliRunner();
+        var cli = new CliRunner(ServiceProvider);
         var exitCode = cli.Run(new[] { "--source", @"C:\nonexistent_app.exe", "--output", "out.enibox" });
         
         Assert.NotEqual(0, exitCode);

@@ -5,11 +5,19 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using EniBox.GUI.Models;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace EniBox.GUI.Services
 {
     public sealed class CliRunner
     {
+        private readonly IServiceProvider _serviceProvider;
+
+        public CliRunner(IServiceProvider serviceProvider)
+        {
+            _serviceProvider = serviceProvider;
+        }
+
         public int Run(string[] args)
         {
             var sourceOption = new Option<string>("--source", "Path to the source EXE file") { IsRequired = true };
@@ -70,9 +78,7 @@ namespace EniBox.GUI.Services
                     }
                 }
 
-                var compressor = new LzmaCompressor();
-                var vfsBuilder = new VfsBuilder(compressor);
-                var packService = new PackService(compressor, vfsBuilder);
+                var packService = (IPackService)_serviceProvider.GetService(typeof(IPackService))!;
 
                 var progress = new Progress<PackProgress>(p =>
                 {

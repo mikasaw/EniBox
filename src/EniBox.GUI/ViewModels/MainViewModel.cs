@@ -60,11 +60,16 @@ namespace EniBox.GUI.ViewModels
         [ObservableProperty]
         private bool _enableSubProcessInjection = true;
 
-        public MainViewModel()
+        public MainViewModel(IPackService packService)
         {
-            var compressor = new LzmaCompressor();
-            var vfsBuilder = new VfsBuilder(compressor);
-            _packService = new PackService(compressor, vfsBuilder);
+            _packService = packService;
+        }
+
+        public MainViewModel() : this(
+            new PackService(
+                new LzmaCompressor(),
+                new VfsBuilder(new LzmaCompressor())))
+        {
         }
 
         [RelayCommand]
