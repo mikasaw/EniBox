@@ -157,7 +157,7 @@ public class PackServiceExceptionTests : VerificationTestBase, IDisposable
         };
         
         var progressReports = new List<PackProgress>();
-        var progress = new Progress<PackProgress>(p => progressReports.Add(p));
+        IProgress<PackProgress> progress = new SynchronousProgress<PackProgress>(p => progressReports.Add(p));
         
         await _packService.PackAsync(config, progress, CancellationToken.None);
         

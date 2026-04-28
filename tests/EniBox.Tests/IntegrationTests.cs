@@ -8,6 +8,7 @@ using EniBox.GUI.Interop;
 using EniBox.GUI.Models;
 using EniBox.GUI.Services;
 using EniBox.GUI.ViewModels;
+using EniBox.Tests.TestInfrastructure;
 using Xunit;
 
 namespace EniBox.Tests
@@ -331,12 +332,11 @@ namespace EniBox.Tests
                 };
 
                 var progressUpdates = new System.Collections.Generic.List<PackProgress>();
-                var progress = new Progress<PackProgress>(p => progressUpdates.Add(p));
+                IProgress<PackProgress> progress = new SynchronousProgress<PackProgress>(p => progressUpdates.Add(p));
 
                 await service.PackAsync(config, progress, default);
 
-                // Should have received at least some progress updates
-                Assert.True(progressUpdates.Count > 0);
+                Assert.True(progressUpdates.Count > 0, $"Expected progress updates but got {progressUpdates.Count}");
             }
             finally
             {
