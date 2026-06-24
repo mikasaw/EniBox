@@ -16,6 +16,46 @@ namespace EniBox.GUI.Services
             public VfsDirNode? Parent { get; set; }
             public List<VfsDirNode> Children { get; } = new();
             public List<PackFileItem> Files { get; } = new();
+
+            private string? _fullPath;
+            public string FullPath
+            {
+                get
+                {
+                    if (_fullPath == null)
+                    {
+                        if (Parent == null || string.IsNullOrEmpty(Parent.Name))
+                            _fullPath = Name;
+                        else
+                            _fullPath = Parent.FullPath + "/" + Name;
+                    }
+                    return _fullPath;
+                }
+            }
+
+            private static string NormalizePath(string path)
+            {
+                return path.Replace('\\', '/');
+            }
+
+            public override bool Equals(object? obj)
+            {
+                if (obj is not VfsDirNode other) return false;
+                if (ReferenceEquals(this, other)) return true;
+                return string.Equals(NormalizePath(FullPath), NormalizePath(other.FullPath), StringComparison.OrdinalIgnoreCase);
+            }
+
+            public override int GetHashCode()
+            {
+                return StringComparer.OrdinalIgnoreCase.GetHashCode(NormalizePath(FullPath));
+            }
+
+            internal void InvalidatePathCache()
+            {
+                _fullPath = null;
+                foreach (var child in Children)
+                    child.InvalidatePathCache();
+            }
         }
 
         private readonly VfsDirNode _root = new() { Name = "" };

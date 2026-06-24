@@ -15,6 +15,7 @@
     <Nullable>enable</Nullable>
     <DefineConstants Condition="'$(CLI_MODE)' == 'true'">$(DefineConstants);CLI_MODE</DefineConstants>
     <StartupObject>EniBox.GUI.Program</StartupObject>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 
   <!-- Publish configuration: single self-contained EXE with embedded native DLLs -->
