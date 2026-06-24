@@ -144,10 +144,54 @@ namespace EniBox.GUI.Services
             return null;
         }
 
+        /// <summary>
+        /// Quick pre-validation of PE header structure before calling native code.
+        /// Prevents native DLL crashes on severely malformed PEs (e.g. NumberOfSections=0).
+        /// </summary>
+        private static bool TryValidatePeStructure(string exePath)
+        {
+            try
+            {
+                byte[] header = new byte[1024];
+                using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                int read = fs.Read(header, 0, header.Length);
+                if (read < 64) return false;
+
+                // Check DOS magic
+                if (header[0] != 0x4D || header[1] != 0x5A) return false;
+
+                // Read e_lfanew at offset 0x3C
+                int peOffset = header[0x3C] | (header[0x3D] << 8) | (header[0x3E] << 16) | (header[0x3F] << 24);
+                if (peOffset < 64 || peOffset + 24 > read) return false;
+
+                // Check PE signature
+                if (header[peOffset] != 0x50 || header[peOffset + 1] != 0x45 ||
+                    header[peOffset + 2] != 0x00 || header[peOffset + 3] != 0x00) return false;
+
+                // Read NumberOfSections (offset +6 from PE signature)
+                int numSections = header[peOffset + 6] | (header[peOffset + 7] << 8);
+                if (numSections <= 0) return false;
+
+                // Read SizeOfOptionalHeader (offset +20 from PE signature)
+                int sizeOfOptionalHeader = header[peOffset + 20] | (header[peOffset + 21] << 8);
+                if (sizeOfOptionalHeader <= 0) return false;
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static PeInfo? GetPeInfo(string exePath)
         {
             try
             {
+                // Pre-validate PE header structure before calling native code (defense-in-depth)
+                if (!TryValidatePeStructure(exePath))
+                    return null;
+
                 int result = PeToolInterop.Open(exePath, out IntPtr ctx);
                 if (result != 0 || ctx == IntPtr.Zero)
                     return null;

@@ -78,5 +78,11 @@ int32_t PE_Validate(PE_CONTEXT* ctx)
     if (result != PE_SUCCESS) return result;
     if (ctx->machine != IMAGE_FILE_MACHINE_I386 && ctx->machine != IMAGE_FILE_MACHINE_AMD64)
         return PE_ERR_UNSUPPORTED_ARCH;
+    /* Reject malformed PEs that would cause downstream crashes */
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)ctx->nt_headers;
+    if (nt->FileHeader.SizeOfOptionalHeader == 0)
+        return PE_ERR_INVALID_PE;
+    if (nt->FileHeader.NumberOfSections == 0)
+        return PE_ERR_INVALID_PE;
     return PE_SUCCESS;
 }

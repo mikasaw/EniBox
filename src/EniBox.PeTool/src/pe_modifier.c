@@ -52,6 +52,8 @@ int32_t PE_ModAddSection(PE_CONTEXT* ctx, const char* name,
 
     if (nt->FileHeader.NumberOfSections >= 96)
         return PE_ERR_SECTION_FULL;
+    if (nt->FileHeader.NumberOfSections == 0)
+        return PE_ERR_INVALID_PE;
 
     uint32_t last_section_idx = nt->FileHeader.NumberOfSections - 1;
     IMAGE_SECTION_HEADER* last_section = &sections[last_section_idx];
