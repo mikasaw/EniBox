@@ -120,10 +120,10 @@ DWORD WINAPI Hook_SetFilePointer(HANDLE hFile, LONG lDistanceToMove,
                 new_pos = (uint32_t)lDistanceToMove;
                 break;
             case FILE_CURRENT:
-                new_pos = h->current_pos + (uint32_t)lDistanceToMove;
+                new_pos = (uint32_t)((uint64_t)h->current_pos + (int64_t)lDistanceToMove);
                 break;
             case FILE_END:
-                new_pos = file_size + (uint32_t)lDistanceToMove;
+                new_pos = (uint32_t)((uint64_t)file_size + (int64_t)lDistanceToMove);
                 break;
             default:
                 SetLastError(ERROR_INVALID_PARAMETER);

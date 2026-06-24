@@ -20,7 +20,7 @@ static uint32_t ComputeCrc32(const uint8_t* data, uint32_t size) {
     for (uint32_t i = 0; i < size; i++) {
         crc ^= data[i];
         for (int j = 0; j < 8; j++) {
-            crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
+            crc = (crc >> 1) ^ (0xEDB88320 & (0u - (crc & 1)));
         }
     }
     return crc ^ 0xFFFFFFFF;

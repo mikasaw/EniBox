@@ -30,6 +30,7 @@
 #define VFS_ERR_HASHTABLE_INIT  6006
 #define VFS_ERR_NULL_CONTEXT    6007
 #define VFS_ERR_DECOMPRESS      6008
+#define VFS_ERR_NO_MEMORY       6009
 
 /* VFS handle table errors (6101-6199) */
 #define VFS_ERR_HANDLE_TABLE_FULL  6101

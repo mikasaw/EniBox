@@ -242,8 +242,7 @@ int32_t LzmaDec_Decompress(const uint8_t* compressed, uint32_t compressed_size,
     if (origSize > *output_size) return LZMA_ERR_SIZE_MISMATCH;
 
     /* Validate properties byte */
-    if (props[0] >= 9 * 5 * 5) return LZMA_ERR_INVALID_PROPS; Validate properties byte */
-    if (props[0] >= 9 * 5 * 5) return -4;
+    if (props[0] >= 9 * 5 * 5) return LZMA_ERR_INVALID_PROPS;
 
     /* Setup range decoder */
     CRangeDec rc;
