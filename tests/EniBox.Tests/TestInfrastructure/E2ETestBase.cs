@@ -18,7 +18,7 @@ public abstract class E2ETestBase : VerificationTestBase, IDisposable
     
     protected E2ETestBase(ITestOutputHelper output) : base(output)
     {
-        TempFiles = new TempFileHelper();
+        TempFiles = new TempFileHelper(GetType().Name);
         Compressor = new LzmaCompressor();
         VfsBuilder = new VfsBuilder(Compressor);
         PackService = new EniBox.GUI.Services.PackService(Compressor, VfsBuilder);
