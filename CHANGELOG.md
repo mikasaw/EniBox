@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-24
+
+### Fixed
+- 修复 PeTool 处理 NumberOfSections=0 的 PE 时 native 崩溃（AccessViolationException）
+- 加强 PE 输入验证：SizeOfOptionalHeader==0、NumberOfSections==0 提前拒绝
+- C# 侧 PE 头预验证（防御纵深，无需重新编译 C++ DLL）
+- 修复 PeBoundaryTests 数组越界 bug
+- 修复 Loader C4244 (uint64→uint32 截断) 编译警告
+- 修复 Loader C4146 (无符号取负) 编译警告
+- 修复 lzma_dec.c 重复注释行
+- 补充 VFS_ERR_NO_MEMORY (6009) 缺失错误码
+
+### Changed
+- VfsDirNode 增加 FullPath 属性缓存；重写 Equals/GetHashCode 基于路径比较
+- TempFileHelper 增加测试名前缀和进程 ID，缓解 E2E 并行竞争
+- csproj 添加 PackageLicenseExpression MIT 声明
+- .gitignore 增加 TestResults/ 和 .claude/ 忽略规则
+
+### Added
+- PeBoundaryTests: 8 个 PE 畸形输入边界测试用例
+- .github/workflows/ci.yml: GitHub Actions CI/CD 流水线
+- LICENSE: MIT 开源许可证文件
+
 ## [0.5.0] - 2026-04-28
 
 ### Added
