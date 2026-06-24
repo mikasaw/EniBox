@@ -6,4 +6,6 @@ if %ERRORLEVEL% NEQ 0 (
 )
 cl.exe vfstest.c /Fe:VfsTest.exe advapi32.lib /nologo
 if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
+if not exist publish mkdir publish
+copy /y VfsTest.exe publish\ >nul
 echo Build success: VfsTest.exe
