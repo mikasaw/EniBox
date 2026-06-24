@@ -73,5 +73,11 @@ $RECYCLE.BIN/
 *.swp
 *~
 
+## Test results
+TestResults/
+
+## Claude AI
+.claude/
+
 ## Arts
 .arts/
