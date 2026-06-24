@@ -79,5 +79,17 @@ TestResults/
 ## Claude AI
 .claude/
 
+## MSVC build artifacts
+*.tlog
+*.recipe
+*.lastbuildstate
+*CppClean.log
+
+## Test helpers - native binaries
+tests/TestHelpers/*/publish/
+
+## CodeArts IDE
+.codeartsdoer/
+
 ## Arts
 .arts/
