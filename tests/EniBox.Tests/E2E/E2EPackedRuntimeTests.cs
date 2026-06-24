@@ -139,6 +139,96 @@ public class PackedVfsRuntimeTests : E2ETestBase
     }
 
     /// <summary>
+    /// 验证: 封包本项目自有的 VfsTest.exe（C 原生程序），运行后验证
+    /// VFS 文件读取、文件指针定位、文件属性查询、写入拒绝等全部功能正常。
+    /// 这是最完整的端到端自举测试 — 覆盖 VFS 运行时的所有核心路径。
+    /// </summary>
+    [Fact]
+    public async Task E2E_PackedVfsTest_AllVfsFeatures()
+    {
+        if (!IsPeToolAvailable || !TestExeBuilder.IsHelperAvailable("VfsTest"))
+        {
+            Logger.Warning("⚠ PeTool.dll或VfsTest不可用，跳过测试");
+            return;
+        }
+
+        var vfsTestPath = TestExeBuilder.GetHelperPath("VfsTest");
+        var outputDir = TempFiles.CreateTempDirectory();
+        var outputPath = Path.Combine(outputDir, "vfstest.enibox");
+
+        // 创建 VFS 数据文件：路径为 VfsTest.exe 硬编码的测试路径
+        var vfsFilePath = @"C:\EniBox_VFS_Test_File.txt";
+        var vfsContent = "Hello from EniBox VFS! This file is embedded at pack time.";
+        var srcFile = TempFiles.CreateTempFile(vfsContent, ".tmp");
+
+        // 封包 VfsTest.exe + 嵌入 VFS 文件
+        var config = new PackConfiguration
+        {
+            SourceExePath = vfsTestPath,
+            OutputPath = outputPath,
+            EnableSubProcessInjection = true,
+            EnableRegistryVirtualization = false
+        };
+        config.Files.Add(new PackFileItem
+        {
+            SourcePath = srcFile,
+            VirtualPath = vfsFilePath,
+            IsCompressed = false,
+            OriginalSize = new FileInfo(srcFile).Length
+        });
+
+        var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
+        if (!packResult.IsSuccess)
+        {
+            Logger.Warning($"⚠ 封包失败: {packResult.ErrorMessage}");
+            return;
+        }
+        Logger.Success($"✓ 封包成功: {packResult.OutputFileSize} bytes, VFS文件数: {config.Files.Count}");
+
+        // 确认输出文件存在
+        if (!File.Exists(outputPath))
+        {
+            Logger.Warning($"⚠ 封包输出文件不存在，跳过运行验证");
+            return;
+        }
+
+        // 运行封包后的 VfsTest.exe（无参数，它会运行所有内置测试）
+        var runResult = ProcessRunner.Run(outputPath, "", 15000);
+
+        Logger.Info($"退出码: {runResult.ExitCode}");
+        Logger.Info($"输出:\n{runResult.StandardOutput}");
+
+        // 核心验证：VFS 测试全部通过
+        Assert.Contains("CHECK:RESULT:PASS", runResult.StandardOutput);
+        Assert.Contains("CHECK:TEST_BEGIN:VfsTest", runResult.StandardOutput);
+
+        // 逐项验证每个测试场景
+        Assert.Contains("Test 1: VFS File Read", runResult.StandardOutput);
+        Assert.Contains("CHECK:PASS:test_VfsFileRead", runResult.StandardOutput);
+
+        Assert.Contains("Test 2: VFS File Seek", runResult.StandardOutput);
+        Assert.Contains("CHECK:PASS:test_VfsFileSeek", runResult.StandardOutput);
+
+        Assert.Contains("Test 3: VFS File Attributes", runResult.StandardOutput);
+        Assert.Contains("CHECK:PASS:test_VfsFileAttributes", runResult.StandardOutput);
+
+        Assert.Contains("Test 4: VFS File Not Found (passthrough)", runResult.StandardOutput);
+        Assert.Contains("CHECK:PASS:test_VfsFileNotFound", runResult.StandardOutput);
+
+        Assert.Contains("Test 5: VFS File Write Rejected", runResult.StandardOutput);
+        Assert.Contains("CHECK:PASS:test_VfsFileWriteRejected", runResult.StandardOutput);
+
+        Assert.Contains("Test 6: Child Process", runResult.StandardOutput);
+        Assert.Contains("CHECK:PASS:test_ChildProcess", runResult.StandardOutput);
+
+        // 确认没有任何 FAIL
+        Assert.DoesNotContain("CHECK:FAIL", runResult.StandardOutput);
+
+        Assert.Equal(0, runResult.ExitCode);
+        Logger.Success("✓ 封包 VfsTest 全部 6 个测试通过，VFS 运行时功能完整");
+    }
+
+    /// <summary>
     /// 验证: 封包后 fc.exe 正常退出（不超时挂起）。
     /// 注意：某些 Windows 系统二进制（如 fc.exe）在封包后可能因 Loader 兼容性
     /// 触发 STATUS_STACK_BUFFER_OVERRUN 而快速崩溃，但不会挂起。
