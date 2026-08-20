@@ -244,6 +244,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -NoTest
 
 失败用例列表(前 10 个)带错误首行摘要。TRX 报告落在 `tests/EniBox.Tests/TestResults/verify-e2e-<时间戳>.trx`,包含完整错误信息。
 
+**Skipped 计数细节**: xUnit.SkippableFact 的 skipped 测例在 TRX 里报 `outcome="NotExecuted"`(不是 `outcome="Skipped"`)。脚本遍历 `UnitTestResult` 节点统计 `NotExecuted` 数量作为 Skipped 值。`executed = total - NotExecuted`,所以有 skipped 时 `executed < total`,这也是退出码 3 的另一触发条件。
+
 ### 8.4 环境前置
 
 脚本启动时会自动:
