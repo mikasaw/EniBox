@@ -69,6 +69,13 @@ cd tests\TestHelpers\VfsTest
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
+或直接用 cmd 脚本:
+
+```cmd
+cd tests\TestHelpers\VfsTest
+.\build.cmd
+```
+
 预期输出:
 ```
 Using vcvars64.bat: C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Auxiliary\Build\vcvars64.bat
@@ -110,18 +117,30 @@ Passed!  - Failed: 0, Passed: N, Skipped: M, Total: N+M
 `E2E_PackedVfsTest_AllVfsFeatures` 通过时输出应包含 9 个 `CHECK:PASS:test_*` 断言：
 
 ```
-Test 1: VFS File Read               → test_VfsFileRead
-Test 2: VFS File Seek               → test_VfsFileSeek
-Test 3: VFS File Attributes         → test_VfsFileAttributes
-Test 4: VFS File Not Found          → test_VfsFileNotFound
-Test 5: VFS File Write Rejected     → test_VfsFileWriteRejected
-Test 6: Child Process               → test_ChildProcess
-Test 7: Loader Extraction Path      → test_LoaderExtractionPath  (P0-02)
-Test 8: Loader Integrity CRC32      → test_LoaderIntegrityCrc32  (P0-02)
-Test 9: Sub-Process Injection       → test_SubProcessInjectionStrategy (P0-03)
+Test 1: VFS File Read               → test_VfsFileRead               (需封包)
+Test 2: VFS File Seek               → test_VfsFileSeek               (需封包)
+Test 3: VFS File Attributes         → test_VfsFileAttributes         (需封包)
+Test 4: VFS File Not Found          → test_VfsFileNotFound           (无需封包)
+Test 5: VFS File Write Rejected     → test_VfsFileWriteRejected      (无需封包)
+Test 6: Child Process               → test_ChildProcess              (无需封包)
+Test 7: Loader Extraction Path      → test_LoaderExtractionPath      (P0-02, 需封包)
+Test 8: Loader Integrity CRC32      → test_LoaderIntegrityCrc32      (P0-02, 需封包)
+Test 9: Sub-Process Injection       → test_SubProcessInjectionStrategy (P0-03, 需封包)
 ```
 
 任一断言缺失 → 立即看 VfsTest.exe 独立运行输出（用封包产物直接运行）。
+
+### 4.2 P0 安全加固子测试 (Test 7/8/9) 详解
+
+| 子测试 | 验证什么 | unpacked 行为 |
+|--------|----------|----------------|
+| **Test 7**: test_LoaderExtractionPath | `%TEMP%\EniBox-<pid>-<rnd>\EniBox.Loader.<pid>.<rnd>.dll` 存在,文件名含 PID | FAIL: "No EniBox-* directory" (无 Loader 提取) |
+| **Test 8**: test_LoaderIntegrityCrc32 | .enibox section 嵌入式 Loader DLL 的 CRC32 与磁盘提取的 Loader DLL CRC32 一致 | FAIL: ".enibox section not found" (无 .enibox section) |
+| **Test 9**: test_SubProcessInjectionStrategy | 创建子进程 cmd.exe 后,父进程 VFS 仍工作 (证明子进程注入 hook 未破坏父进程 hooks) | FAIL: "Pre-child: VFS open failed" (无 VFS hook) |
+
+**核心设计**: Test 8 不只检查"两次读取一致",而是从当前 PE 的 .enibox section 取出嵌入式 Loader 字节,与磁盘文件对比 CRC32 — 直接验证 `loader_main.c::ExtractEmbeddedLoader` 的 `FILE_FLAG_WRITE_THROUGH` + 写后回读链路。
+
+**Test 9 不区分三级注入**: APC → NtCreateThreadEx → CreateRemoteThread 的回退由 Loader 在 `inject.c` 实现,本测试仅验证"注入链路通畅 + 不破坏父进程",具体哪一级生效看 Loader 端 `OutputDebugStringW`。
 
 ## 5. 已知问题
 
@@ -177,4 +196,7 @@ Test 9: Sub-Process Injection       → test_SubProcessInjectionStrategy (P0-03)
 - **MIT-229**: E2E-01 补齐 native DLL
 - **MIT-230**: E2E-02 改造 Skip 语义 (Skip.IfNot)
 - **MIT-231**: E2E-03 P0 安全加固覆盖 (VfsTest 扩展 — 本文档对应任务)
+  - VfsTest 新增 3 个子测试 (Test 7/8/9 覆盖 P0-02 DLL 提取路径 + CRC32 完整性 + P0-03 子进程注入策略)
+  - `build.cmd` / `build.ps1` 支持多版本 VS 探测 (环境变量 → vswhere → 硬编码 fallback)
+  - `E2EPackedRuntimeTests.cs` 追加 3 个新 CHECK:PASS 断言
 - **MIT-232**: 后续任务
