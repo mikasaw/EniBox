@@ -212,11 +212,21 @@ public class PackedVfsRuntimeTests : E2ETestBase
         Assert.Contains("Test 6: Child Process", runResult.StandardOutput);
         Assert.Contains("CHECK:PASS:test_ChildProcess", runResult.StandardOutput);
 
+        // P0 安全加固覆盖 (MIT-231): Loader 提取路径 / CRC32 / 子进程注入策略
+        Assert.Contains("Test 7: Loader Extraction Path (P0-02)", runResult.StandardOutput);
+        Assert.Contains("CHECK:PASS:test_LoaderExtractionPath", runResult.StandardOutput);
+
+        Assert.Contains("Test 8: Loader Integrity CRC32 (P0-02)", runResult.StandardOutput);
+        Assert.Contains("CHECK:PASS:test_LoaderIntegrityCrc32", runResult.StandardOutput);
+
+        Assert.Contains("Test 9: Sub-Process Injection Strategy (P0-03)", runResult.StandardOutput);
+        Assert.Contains("CHECK:PASS:test_SubProcessInjectionStrategy", runResult.StandardOutput);
+
         // 确认没有任何 FAIL
         Assert.DoesNotContain("CHECK:FAIL", runResult.StandardOutput);
 
         Assert.Equal(0, runResult.ExitCode);
-        Logger.Success("✓ 封包 VfsTest 全部 6 个测试通过，VFS 运行时功能完整");
+        Logger.Success("✓ 封包 VfsTest 全部 9 个测试通过，VFS 运行时 + P0 安全加固功能完整");
     }
 
     /// <summary>
