@@ -199,4 +199,72 @@ Test 9: Sub-Process Injection       → test_SubProcessInjectionStrategy (P0-03,
   - VfsTest 新增 3 个子测试 (Test 7/8/9 覆盖 P0-02 DLL 提取路径 + CRC32 完整性 + P0-03 子进程注入策略)
   - `build.cmd` / `build.ps1` 支持多版本 VS 探测 (环境变量 → vswhere → 硬编码 fallback)
   - `E2EPackedRuntimeTests.cs` 追加 3 个新 CHECK:PASS 断言
-- **MIT-232**: 后续任务
+- **MIT-232**: E2E-04 一键验证脚本（`verify-e2e.ps1`）
+
+## 8. 一键验证脚本 (verify-e2e.ps1)
+
+`tests/verify-e2e.ps1` 把上述第 3 节"五步真跑流程"封装为单条命令,自动跑完 native build → GUI build → Tests build → dotnet test,并按退出码契约汇报结果。
+
+### 8.1 用法
+
+```powershell
+# 完整跑(推荐 CI 验证): native + GUI + Tests + 全测试
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1
+
+# 跳过 native build, 假设 native DLL 已在位(开发迭代时省时间)
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -SkipNativeBuild
+
+# 只 build 不跑 test(CI 准备阶段)
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -NoTest
+```
+
+### 8.2 退出码契约
+
+| 退出码 | 含义 | 何时触发 |
+|--------|------|---------|
+| `0` | 全部通过 | `passed == total` 且 `failed == 0` 且 `skipped == 0` |
+| `1` | 有失败 | TRX 报告中 `failed > 0`,或 dotnet test 自身非 0 退出且 TRX 不可读 |
+| `2` | 缺前置 | MSBuild 找不到 / dotnet 找不到 / `EniBox.PeTool.dll` 缺失 / `EniBox.Loader.dll` 缺失 / GUI build 后 `EniBox.PeTool.dll` 未复制到 bin / Tests build 后未复制到 tests bin |
+| `3` | 有 skipped | `skipped > 0` 或 `total != executed`(不符合"全跑通"预期,可能 PeTool 探测失败 / Helper 缺失) |
+
+### 8.3 输出格式
+
+脚本输出每步骤进度(Step 1/4 ~ 4/4),结尾打印 TRX 报告解析汇总:
+
+```
+=== TRX 报告解析 ===
+  Outcome:  Completed
+  Total:    173
+  Executed: 173
+  Passed:   172
+  Failed:   1
+  Skipped:  0
+  TRX:      ...\tests\EniBox.Tests\TestResults\verify-e2e-20260820-153000.trx
+```
+
+失败用例列表(前 10 个)带错误首行摘要。TRX 报告落在 `tests/EniBox.Tests/TestResults/verify-e2e-<时间戳>.trx`,包含完整错误信息。
+
+### 8.4 环境前置
+
+脚本启动时会自动:
+1. **MSBuild 探测**: 优先 `C:\Program Files\Microsoft Visual Studio\18\Insiders\MSBuild\Current\Bin\MSBuild.exe`,降级走 `vswhere.exe -latest` 探测 VS 安装路径(由 §6.1 覆盖)
+2. **dotnet CLI 探测**: 走标准 PATH
+3. **DOTNET_ROOT**: 优先用现有环境变量,缺失时探测 `C:\Users\www\dotnet`(本机 hostfxr 用户目录)
+4. **PATH 前置 dotnet**: 把 `dotnet.exe` 所在目录 prepend 到 PATH,让 testhost 启动 hostfxr
+
+若 MSBuild / dotnet 找不到 → 退出码 2(缺前置)。
+
+### 8.5 何时用什么 flag
+
+| 场景 | 推荐命令 |
+|------|---------|
+| **CI 流水线 E2E 验证(最严)** | `verify-e2e.ps1` (全跑,期望退出码 0) |
+| **CI 流水线 build-only gate** | `verify-e2e.ps1 -NoTest` (期望退出码 0) |
+| **本地迭代(已 build 过,只重跑 test)** | `verify-e2e.ps1 -SkipNativeBuild` (省 native 编译) |
+| **CI 默认禁了 native build(native DLL 由前置 stage 提供)** | `verify-e2e.ps1 -SkipNativeBuild` |
+| **脚本返回 3(有 skipped)** | 看 §6 故障排查;预期 E2E 全跑通的 CI 不应得 3 |
+| **脚本返回 2(缺前置)** | 检查 §2.2 路径 / §8.4 环境前置 |
+
+### 8.6 与原生 5 步命令的关系
+
+`verify-e2e.ps1` 不替代手工 §3,自动化流水线(尤其 `power_assert` / `expect` / CI 环境变量断言)用脚本一次到位即可;排错时仍以 §3 单步命令定位。脚本只是把命令按正确顺序串起来 + 自动解析 TRX + 加退出码契约。
