@@ -12,15 +12,11 @@ public class E2EVfsRuntimeTests : E2ETestBase
 {
     public E2EVfsRuntimeTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public void E2E_FileChecker_ReadsExistingFile_ViaWin32()
     {
-        if (!TestExeBuilder.IsHelperAvailable("FileChecker"))
-        {
-            Logger.Warning("⚠ FileChecker未编译，跳过测试");
-            return;
-        }
-        
+        RequireHelper("FileChecker");
+
         var fileChecker = TestExeBuilder.GetHelperPath("FileChecker");
         var testFile = TempFiles.CreateTempFile("Hello from EniBox VFS test!", ".txt");
         
@@ -34,15 +30,11 @@ public class E2EVfsRuntimeTests : E2ETestBase
         Logger.Success("✓ FileChecker通过Win32 API成功读取文件");
     }
     
-    [Fact]
+[SkippableFact]
     public void E2E_FileChecker_NonExistentFile_ReturnsError()
     {
-        if (!TestExeBuilder.IsHelperAvailable("FileChecker"))
-        {
-            Logger.Warning("⚠ FileChecker未编译，跳过测试");
-            return;
-        }
-        
+        RequireHelper("FileChecker");
+
         var fileChecker = TestExeBuilder.GetHelperPath("FileChecker");
         var result = ProcessRunner.Run(fileChecker, "\"C:\\nonexistent_file_12345.txt\"", 10000);
         
@@ -59,15 +51,11 @@ public class E2ERegVirtRuntimeTests : E2ETestBase
 {
     public E2ERegVirtRuntimeTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public void E2E_RegChecker_ReadsRealRegistry_Succeeds()
     {
-        if (!TestExeBuilder.IsHelperAvailable("RegChecker"))
-        {
-            Logger.Warning("⚠ RegChecker未编译，跳过测试");
-            return;
-        }
-        
+        RequireHelper("RegChecker");
+
         var regChecker = TestExeBuilder.GetHelperPath("RegChecker");
         var result = ProcessRunner.Run(regChecker, "", 10000);
         
@@ -78,15 +66,11 @@ public class E2ERegVirtRuntimeTests : E2ETestBase
         Logger.Success("✓ RegChecker成功读取真实注册表(ProductName)");
     }
     
-    [Fact]
+[SkippableFact]
     public void E2E_RegChecker_VirtualKey_NotFoundWithoutVfs()
     {
-        if (!TestExeBuilder.IsHelperAvailable("RegChecker"))
-        {
-            Logger.Warning("⚠ RegChecker未编译，跳过测试");
-            return;
-        }
-        
+        RequireHelper("RegChecker");
+
         var regChecker = TestExeBuilder.GetHelperPath("RegChecker");
         var result = ProcessRunner.Run(regChecker, "", 10000);
         
@@ -101,16 +85,12 @@ public class E2ESubProcRuntimeTests : E2ETestBase
 {
     public E2ESubProcRuntimeTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public void E2E_SubProcHost_LaunchesChild_Succeeds()
     {
-        if (!TestExeBuilder.IsHelperAvailable("SubProcHost") || 
-            !TestExeBuilder.IsHelperAvailable("SubProcChild"))
-        {
-            Logger.Warning("⚠ SubProcHost/Child未编译，跳过测试");
-            return;
-        }
-        
+        RequireHelper("SubProcHost");
+        RequireHelper("SubProcChild");
+
         var host = TestExeBuilder.GetHelperPath("SubProcHost");
         var child = TestExeBuilder.GetHelperPath("SubProcChild");
         

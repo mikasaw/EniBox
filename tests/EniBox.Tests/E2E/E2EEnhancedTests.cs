@@ -12,15 +12,11 @@ public class LoaderExtractionTests : E2ETestBase
 {
     public LoaderExtractionTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public async Task E2E_PackedExe_LoaderDll_ExtractedToTempDir()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过测试");
-            return;
-        }
-        
+        RequirePeTool();
+
         var sourcePath = GetSystemFcExePath();
         var outputPath = Path.Combine(TempFiles.CreateTempDirectory(), "fc_loader_test.enibox");
         
@@ -57,15 +53,11 @@ public class SpecialPathTests : E2ETestBase
 {
     public SpecialPathTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public async Task E2E_Pack_SourceWithSpaces_ProducesOutput()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过测试");
-            return;
-        }
-        
+        RequirePeTool();
+
         var sourcePath = GetSystemFcExePath();
         var outputDir = TempFiles.CreateTempDirectory();
         var spacedDir = Path.Combine(outputDir, "path with spaces");
@@ -85,15 +77,11 @@ public class SpecialPathTests : E2ETestBase
         }
     }
     
-    [Fact]
+[SkippableFact]
     public async Task E2E_Pack_SourceWithChinesePath_ProducesOutput()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过测试");
-            return;
-        }
-        
+        RequirePeTool();
+
         var sourcePath = GetSystemFcExePath();
         var outputDir = TempFiles.CreateTempDirectory();
         var chineseDir = Path.Combine(outputDir, "中文路径测试");
@@ -118,15 +106,11 @@ public class RepackTests : E2ETestBase
 {
     public RepackTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public async Task E2E_Repack_AlreadyPackedExe_ReturnsErrorOrOverwrites()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过测试");
-            return;
-        }
-        
+        RequirePeTool();
+
         var sourcePath = GetSystemFcExePath();
         var outputDir = TempFiles.CreateTempDirectory();
         var firstOutput = Path.Combine(outputDir, "first.enibox");
@@ -158,15 +142,11 @@ public class MultiFileStressTests : E2ETestBase
 {
     public MultiFileStressTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public async Task E2E_Pack_MultipleDependencies_ProducesOutput()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过测试");
-            return;
-        }
-        
+        RequirePeTool();
+
         var sourcePath = GetSystemFcExePath();
         var outputDir = TempFiles.CreateTempDirectory();
         var outputPath = Path.Combine(outputDir, "multi_file.enibox");

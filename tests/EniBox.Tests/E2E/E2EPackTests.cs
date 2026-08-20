@@ -12,15 +12,11 @@ public class FullPackFlowTests : E2ETestBase
 {
     public FullPackFlowTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public async Task E2E_FullPack_WithFcExe_ProducesOutputFile()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过E2E测试");
-            return;
-        }
-        
+        RequirePeTool();
+
         var sourcePath = GetSystemFcExePath();
         var outputPath = Path.Combine(TempFiles.CreateTempDirectory(), "fc.enibox");
         
@@ -48,15 +44,11 @@ public class FullPackFlowTests : E2ETestBase
         Logger.Success($"✓ 输出文件大小验证: {sourceSize} → {outputSize} bytes");
     }
     
-    [Fact]
+[SkippableFact]
     public async Task E2E_FullPack_WithDependencies_ProducesOutputFile()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过E2E测试");
-            return;
-        }
-        
+        RequirePeTool();
+
         var sourcePath = GetSystemFcExePath();
         var outputPath = Path.Combine(TempFiles.CreateTempDirectory(), "fc_with_deps.enibox");
         
@@ -79,15 +71,11 @@ public class PackedExeRunTests : E2ETestBase
 {
     public PackedExeRunTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public async Task E2E_PackedFcExe_RunsAndExitsNormally()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过E2E测试");
-            return;
-        }
-        
+        RequirePeTool();
+
         var sourcePath = GetSystemFcExePath();
         var outputPath = Path.Combine(TempFiles.CreateTempDirectory(), "fc_test.enibox");
         
@@ -116,15 +104,11 @@ public class VfsRuntimeAccessTests : E2ETestBase
 {
     public VfsRuntimeAccessTests(ITestOutputHelper output) : base(output) { }
     
-    [Fact]
+[SkippableFact]
     public async Task E2E_PackedExe_VfsFileAccess_NonVfsFile_Passthrough()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过E2E测试");
-            return;
-        }
-        
+        RequirePeTool();
+
         var sourcePath = GetSystemFcExePath();
         var outputPath = Path.Combine(TempFiles.CreateTempDirectory(), "fc_vfs.enibox");
         

@@ -23,14 +23,11 @@ public class PackedVfsRuntimeTests : E2ETestBase
     /// 验证: 封包后的程序通过 VFS 读取嵌入文件
     /// 步骤: 编译 FileChecker 辅助程序 → 将其与数据文件一起封包 → 运行封包后程序 → 确认读到嵌入内容
     /// </summary>
-    [Fact]
+[SkippableFact]
     public async Task E2E_PackedFileChecker_ReadsEmbeddedFileViaVfs()
     {
-        if (!IsPeToolAvailable || !TestExeBuilder.IsHelperAvailable("FileChecker"))
-        {
-            Logger.Warning("⚠ PeTool.dll或FileChecker不可用，跳过测试");
-            return;
-        }
+        RequirePeTool();
+        RequireHelper("FileChecker");
 
         var fcPath = TestExeBuilder.GetHelperPath("FileChecker");
         var outputPath = Path.Combine(TempFiles.CreateTempDirectory(), "fc_vfs_file.enibox");
@@ -80,14 +77,11 @@ public class PackedVfsRuntimeTests : E2ETestBase
     /// 验证: 封包后的程序读取仅存在于 VFS 中的文件（磁盘上不存在该文件）
     /// 这严格验证 VFS Hook 是否正常工作，而非 fallthrough 到真实文件系统
     /// </summary>
-    [Fact]
+[SkippableFact]
     public async Task E2E_PackedFileChecker_ReadsVfsOnlyFile()
     {
-        if (!IsPeToolAvailable || !TestExeBuilder.IsHelperAvailable("FileChecker"))
-        {
-            Logger.Warning("⚠ PeTool.dll或FileChecker不可用，跳过测试");
-            return;
-        }
+        RequirePeTool();
+        RequireHelper("FileChecker");
 
         var fcPath = TestExeBuilder.GetHelperPath("FileChecker");
         var outputPath = Path.Combine(TempFiles.CreateTempDirectory(), "fc_vfs_only.enibox");
@@ -143,14 +137,11 @@ public class PackedVfsRuntimeTests : E2ETestBase
     /// VFS 文件读取、文件指针定位、文件属性查询、写入拒绝等全部功能正常。
     /// 这是最完整的端到端自举测试 — 覆盖 VFS 运行时的所有核心路径。
     /// </summary>
-    [Fact]
+[SkippableFact]
     public async Task E2E_PackedVfsTest_AllVfsFeatures()
     {
-        if (!IsPeToolAvailable || !TestExeBuilder.IsHelperAvailable("VfsTest"))
-        {
-            Logger.Warning("⚠ PeTool.dll或VfsTest不可用，跳过测试");
-            return;
-        }
+        RequirePeTool();
+        RequireHelper("VfsTest");
 
         var vfsTestPath = TestExeBuilder.GetHelperPath("VfsTest");
         var outputDir = TempFiles.CreateTempDirectory();
@@ -235,14 +226,10 @@ public class PackedVfsRuntimeTests : E2ETestBase
     /// 这是 Loader 的已知限制，不影响 VFS 文件读取等核心功能。
     /// 对应现有测试 PackedExeRunTests.E2E_PackedFcExe_RunsAndExitsNormally
     /// </summary>
-    [Fact]
+[SkippableFact]
     public async Task E2E_PackedFcExe_ExitsNormally_NotHanging()
     {
-        if (!IsPeToolAvailable)
-        {
-            Logger.Warning("⚠ PeTool.dll不可用，跳过E2E测试");
-            return;
-        }
+        RequirePeTool();
 
         var sourcePath = GetSystemFcExePath();
         var outputPath = Path.Combine(TempFiles.CreateTempDirectory(), "fc_exit.enibox");
