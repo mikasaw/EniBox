@@ -35,3 +35,32 @@ jobs:
       - run: dotnet restore
       - run: dotnet build -c Release --no-restore
       - run: dotnet test -c Release --no-build --logger "console;verbosity=detailed"
+
+  e2e-verify:
+    needs: [dotnet-build, msvc-build]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.x'
+      - uses: microsoft/setup-msbuild@v2
+      - name: 编译 native DLLs (PeTool + Loader)
+        run: |
+          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+      - name: 编译 GUI + Tests
+        run: |
+          dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release --nologo -v:minimal
+          dotnet build tests/EniBox.Tests/EniBox.Tests.csproj -c Release --nologo -v:minimal
+      - name: 跑 E2E 验证脚本 (verify-e2e.ps1)
+        id: e2e
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -SkipNativeBuild
+      - name: 上传 TRX 报告 (失败时)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-e2e-trx
+          path: tests/EniBox.Tests/TestResults/verify-e2e-*.trx
+          if-no-files-found: warn

@@ -270,3 +270,140 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -NoTest
 ### 8.6 与原生 5 步命令的关系
 
 `verify-e2e.ps1` 不替代手工 §3,自动化流水线(尤其 `power_assert` / `expect` / CI 环境变量断言)用脚本一次到位即可;排错时仍以 §3 单步命令定位。脚本只是把命令按正确顺序串起来 + 自动解析 TRX + 加退出码契约。
+
+## 9. CI 集成 (GitHub Actions e2e-verify job)
+
+MIT-233 把 `verify-e2e.ps1` 接进 `.github/workflows/ci.yml`,作为第 4 个 job `e2e-verify`,与现有 `dotnet-build` / `msvc-build` / `dotnet-test` 协同。
+
+### 9.1 触发条件
+
+与现有 3 个 job 相同:
+
+- `push` 到 `main` / `develop`
+- `pull_request` 目标 `main`
+
+### 9.2 依赖关系
+
+```
+dotnet-build ┐
+             ├─→ e2e-verify
+msvc-build  ─┘
+```
+
+`e2e-verify` 的 `needs: [dotnet-build, msvc-build]` 确保 native DLLs 已被编译。但本 job 内部仍重跑一次 native build,理由 1: GitHub Actions 各 job 工作目录独立,matrix 上游 job 的 `bin/` 产物不会自动传递;理由 2: 显式重 build 让 `e2e-verify` 自包含,便于重跑单个 job 排错。
+
+### 9.3 步骤序列
+
+| Step | 命令 / 工具 | 说明 |
+|------|------------|------|
+| 1 | `actions/checkout@v4` | 拉代码 |
+| 2 | `actions/setup-dotnet@v4` (.NET 8.x) | 装 .NET SDK |
+| 3 | `microsoft/setup-msbuild@v2` | 装 MSBuild(为 native build) |
+| 4 | `msbuild` PeTool + Loader | 编译 native DLLs (Release/x64) |
+| 5 | `dotnet build` GUI + Tests | 编译 .NET 端 + Tests |
+| 6 | `verify-e2e.ps1 -SkipNativeBuild` | 跑 E2E 验证(已在 step 4 build,跳过 native) |
+| 7 (失败时) | `actions/upload-artifact@v4` | 上传 TRX 报告 |
+
+### 9.4 退出码契约映射
+
+`verify-e2e.ps1` 的 4 个退出码在 GitHub Actions 中:
+
+| 退出码 | 含义 | CI 行为 |
+|--------|------|---------|
+| `0` | 全部通过(0 failed / 0 skipped) | ✅ step success → job success |
+| `1` | 有 failed 测试 / 编译失败 | ❌ step fail → job fail |
+| `2` | 缺前置(MSBuild/dotnet/DLL 不在位) | ❌ step fail → job fail |
+| `3` | 有 skipped(违反"全跑通"预期) | ❌ step fail → job fail |
+
+GitHub Actions 会自动把脚本非 0 退出码 → step fail,所以无需额外 `if:` 判 exit code。所有 1/2/3 都视为 CI 不通过。
+
+### 9.5 TRX Artifact 上传
+
+`verify-e2e.ps1` 把 TRX 报告写到 `tests/EniBox.Tests/TestResults/verify-e2e-<时间戳>.trx`。CI 在 `e2e-verify` step 失败时自动上传:
+
+```yaml
+- name: 上传 TRX 报告 (失败时)
+  if: failure()
+  uses: actions/upload-artifact@v4
+  with:
+    name: verify-e2e-trx
+    path: tests/EniBox.Tests/TestResults/verify-e2e-*.trx
+    if-no-files-found: warn
+```
+
+artifact 名 `verify-e2e-trx`,路径匹配所有 `verify-e2e-*.trx`(`*` 通配)。下载后在 GitHub Actions UI 看完整 TRX,包含每个测试用例的状态、错误消息、堆栈。
+
+### 9.6 完整 workflow 片段
+
+```yaml
+e2e-verify:
+  needs: [dotnet-build, msvc-build]
+  runs-on: windows-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.x'
+    - uses: microsoft/setup-msbuild@v2
+    - name: 编译 native DLLs (PeTool + Loader)
+      run: |
+        msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+        msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+    - name: 编译 GUI + Tests
+      run: |
+        dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release --nologo -v:minimal
+        dotnet build tests/EniBox.Tests/EniBox.Tests.csproj -c Release --nologo -v:minimal
+    - name: 跑 E2E 验证脚本 (verify-e2e.ps1)
+      id: e2e
+      shell: pwsh
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -SkipNativeBuild
+    - name: 上传 TRX 报告 (失败时)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: verify-e2e-trx
+        path: tests/EniBox.Tests/TestResults/verify-e2e-*.trx
+        if-no-files-found: warn
+```
+
+### 9.7 为什么不直接用 dotnet-test 跑
+
+`dotnet-test` job 已经存在,但与 `e2e-verify` 的语义边界不同:
+
+| 维度 | dotnet-test | e2e-verify |
+|------|------------|------------|
+| 验证层级 | 单元测试 + 集成测试 | 端到端真跑(包括 .enibox 封包 + 进程注入) |
+| 退出码契约 | 仅 0/非 0 | 0/1/2/3(区分"通过/失败/缺前置/有 skipped") |
+| 跳过检测 | 仅检测 `outcome="Skipped"` | 检测 `outcome="NotExecuted"`(xUnit.SkippableFact 实际值)+ `executed != total` |
+| 前置检查 | 编译失败时 dotnet test 自己报错 | 显式检查 native DLLs 是否在位,缺失时返回 2 |
+| TRX 上传 | 无 | 失败时上传 artifact,便于排查 |
+
+简单说:`dotnet-test` 适合"测一遍,绿就过";`e2e-verify` 适合"严格区分'真跑通'和'没跑'",对回归更敏感。
+
+### 9.8 本地模拟 CI 行为
+
+在本地复现 `e2e-verify` job 的逻辑:
+
+```powershell
+# 完整模拟 CI 跑一遍
+cd G:\AITest\enibox
+msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release --nologo -v:minimal
+dotnet build tests/EniBox.Tests/EniBox.Tests.csproj -c Release --nologo -v:minimal
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -SkipNativeBuild
+echo "exit code: $LASTEXITCODE"  # 期望: 0
+```
+
+故意触发"缺前置"场景(模拟 CI 编译失败 / DLL 缺失):
+
+```powershell
+# 把 native DLL 移走
+mv src\EniBox.PeTool\x64\Release\EniBox.PeTool.dll src\EniBox.PeTool\x64\Release\EniBox.PeTool.dll.bak
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -SkipNativeBuild
+echo "exit code: $LASTEXITCODE"  # 期望: 2 (缺前置)
+# 还原
+mv src\EniBox.PeTool\x64\Release\EniBox.PeTool.dll.bak src\EniBox.PeTool\x64\Release\EniBox.PeTool.dll
+```
+
+本地确认 exit 0 / exit 2 行为后,CI 上跑同一脚本应得同一行为。
