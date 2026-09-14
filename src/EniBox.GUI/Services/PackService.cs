@@ -64,6 +64,9 @@ namespace EniBox.GUI.Services
                 if (loaderData == null)
                     return new PackResult { IsSuccess = false, ErrorMessage = MessageConstants.UnsupportedArch + peInfo.Architecture + MessageConstants.ArchSupportSuffix, ErrorCode = PackErrorCode.UnsupportedArch };
 
+                if (peInfo.Architecture != PeArchitecture.X64)
+                    return new PackResult { IsSuccess = false, ErrorMessage = MessageConstants.UnsupportedArch + peInfo.Architecture + MessageConstants.ArchSupportSuffix, ErrorCode = PackErrorCode.UnsupportedArch };
+
                 var sectionData = CombineSectionData(vfsResult, loaderData);
 
                 var peError = ApplyPeModifications(config.SourceExePath, config.OutputPath, sectionData);
@@ -72,6 +75,13 @@ namespace EniBox.GUI.Services
                     var err = peError.Value;
                     return new PackResult { IsSuccess = false, ErrorMessage = err.ErrorMessage!, ErrorCode = err.ErrorCode };
                 }
+
+                // The packed image statically imports EniBox.Loader.dll — the DLL
+                // must exist next to the output or Windows refuses to start the
+                // process at all. Write the exact bytes that were embedded.
+                var sidecarError = WriteLoaderSidecar(config.OutputPath, loaderData);
+                if (sidecarError != null)
+                    return new PackResult { IsSuccess = false, ErrorMessage = sidecarError, ErrorCode = PackErrorCode.WriteFailed };
 
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -233,21 +243,81 @@ namespace EniBox.GUI.Services
             return data;
         }
 
-        private static byte[] CombineSectionData(VfsBuildResult vfsResult, byte[] loaderData)
+    /// <summary>
+    /// .enibox section layout (consumed by the packed image's bootstrap and
+    /// the Loader's DllMain; x64 only):
+    ///   [0..207]      bootstrap machine code (loads EniBox.Loader.dll via
+    ///                 LoadLibraryA resolved through the PEB, then jumps back
+    ///                 to the original entry point)
+    ///   [208..213]    jmp [rip+0] stub (written by PeTool)
+    ///   [214..221]    VA placeholder (written by PeTool as original ep RVA,
+    ///                 patched by the Loader's DllMain to ImageBase + ep)
+    ///   [222..279]    reserved zeros
+    ///   [280..283]    original ep rva   (written by PeTool)
+    ///   [284..287]    .enibox section rva (written by PeTool)
+    ///   [288..291]    vfs_total_size
+    ///   [292..295]    loader_total_size
+    ///   [296..]       VFS metadata + VFS data + Loader DLL bytes
+    ///   [tail]        reserved (unused; kept for layout stability)
+    /// </summary>
+    private static readonly byte[] BootstrapCode =
+    {
+        0x48, 0x83, 0xEC, 0x28, 0x65, 0x48, 0x8B, 0x04, 0x25, 0x60, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x40,
+        0x18, 0x4C, 0x8B, 0x68, 0x20, 0x49, 0x8B, 0x4D, 0x00, 0x48, 0x8B, 0x09, 0x4C, 0x8B, 0x61, 0x20,
+        0x41, 0x8B, 0x44, 0x24, 0x3C, 0x48, 0x63, 0xC0, 0x45, 0x8B, 0x8C, 0x04, 0x88, 0x00, 0x00, 0x00,
+        0x4F, 0x8D, 0x0C, 0x0C, 0x45, 0x8B, 0x51, 0x18, 0x45, 0x8B, 0x59, 0x20, 0x4F, 0x8D, 0x1C, 0x1C,
+        0x4C, 0x8D, 0x35, 0x69, 0x00, 0x00, 0x00, 0x4C, 0x8D, 0x3D, 0x6F, 0x00, 0x00, 0x00, 0x33, 0xDB,
+        0x41, 0x3B, 0xDA, 0x73, 0x38, 0x41, 0x8B, 0x04, 0x9B, 0x49, 0x8D, 0x3C, 0x04, 0x49, 0x8B, 0xF6,
+        0x48, 0x33, 0xC9, 0x8A, 0x04, 0x0F, 0x3A, 0x04, 0x0E, 0x75, 0x09, 0x48, 0xFF, 0xC1, 0x84, 0xC0,
+        0x75, 0xF1, 0xEB, 0x04, 0xFF, 0xC3, 0xEB, 0xD8, 0x45, 0x8B, 0x41, 0x1C, 0x4F, 0x8D, 0x04, 0x04,
+        0x41, 0x8B, 0x04, 0x98, 0x49, 0x8D, 0x04, 0x04, 0x49, 0x8B, 0xCF, 0xFF, 0xD0, 0x48, 0x83, 0xC4,
+        0x28, 0x65, 0x48, 0x8B, 0x04, 0x25, 0x60, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x40, 0x18, 0x48, 0x8B,
+        0x40, 0x20, 0x48, 0x8B, 0x40, 0x20, 0xBA, 0x00, 0x00, 0x00, 0x00, 0x48, 0x03, 0xC2, 0xFF, 0xE0,
+        0x4C, 0x6F, 0x61, 0x64, 0x4C, 0x69, 0x62, 0x72, 0x61, 0x72, 0x79, 0x41, 0x00, 0x45, 0x6E, 0x69,
+        0x42, 0x6F, 0x78, 0x2E, 0x4C, 0x6F, 0x61, 0x64, 0x65, 0x72, 0x2E, 0x64, 0x6C, 0x6C, 0x00, 0x00
+    };
+
+    private const int BootstrapRegionSize = 288; // VFS metadata starts here
+
+    private static byte[] CombineSectionData(VfsBuildResult vfsResult, byte[] loaderData)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms);
+
+        // [0..295] bootstrap region: code at [0..207], the jmp stub, the VA
+        // placeholder and ep/section RVAs are filled in by PeTool afterwards.
+        var bootstrap = new byte[BootstrapRegionSize];
+        Array.Copy(BootstrapCode, bootstrap, BootstrapCode.Length);
+        writer.Write(bootstrap);
+
+        var vfsMetadata = vfsResult.Metadata;
+        var vfsDataRegion = vfsResult.DataRegion;
+        uint vfsTotalSize = (uint)(vfsMetadata.Length + vfsDataRegion.Length);
+        writer.Write(vfsTotalSize);
+        writer.Write((uint)loaderData.Length);
+
+        writer.Write(vfsMetadata);
+        writer.Write(vfsDataRegion);
+        writer.Write(loaderData);
+
+        return ms.ToArray();
+    }
+
+        private static string? WriteLoaderSidecar(string outputPath, byte[] loaderData)
         {
-            using var ms = new MemoryStream();
-            using var writer = new BinaryWriter(ms);
-
-            var vfsMetadata = vfsResult.Metadata;
-            var vfsDataRegion = vfsResult.DataRegion;
-            uint vfsTotalSize = (uint)(vfsMetadata.Length + vfsDataRegion.Length);
-            writer.Write(vfsTotalSize);
-
-            writer.Write(vfsMetadata);
-            writer.Write(vfsDataRegion);
-            writer.Write(loaderData);
-
-            return ms.ToArray();
+            try
+            {
+                var outputDir = Path.GetDirectoryName(outputPath);
+                if (string.IsNullOrEmpty(outputDir))
+                    outputDir = ".";
+                File.WriteAllBytes(Path.Combine(outputDir, PackConstants.LoaderDllImportName), loaderData);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to write loader sidecar next to '{outputPath}': {ex.Message}");
+                return MessageConstants.UnexpectedError + ex.Message;
+            }
         }
 
         private static (string? ErrorMessage, int ErrorCode)? ApplyPeModifications(string sourcePath, string outputPath, byte[] sectionData)
@@ -267,13 +337,10 @@ namespace EniBox.GUI.Services
                 if (result != 0)
                     return (MessageConstants.FailedProcessTls + result + ").", PackErrorCode.ImportMergeFailed);
 
-                var importEntries = new PeToolInterop.ImportEntry[]
-                {
-                    new() { DllName = PackConstants.LoaderDllImportName }
-                };
-                result = PeToolInterop.MergeImports(ctx, importEntries);
-                if (result != 0)
-                    return (MessageConstants.FailedMergeImports + result + ").", PackErrorCode.ImportMergeFailed);
+                /* NOTE: the import table is intentionally left untouched. On
+                 * Win11 25H2+ the loader hardening ignores appended import
+                 * tables; the Loader DLL is instead loaded by the bootstrap
+                 * at the entry point (see CombineSectionData). */
 
                 result = PeToolInterop.Save(ctx, outputPath);
                 if (result != 0)
