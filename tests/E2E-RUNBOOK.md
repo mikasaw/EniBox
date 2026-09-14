@@ -144,11 +144,27 @@ Test 9: Sub-Process Injection       → test_SubProcessInjectionStrategy (P0-03,
 
 ## 5. 已知问题
 
-### 5.1 fc.exe 在封包后 STATUS_STACK_BUFFER_OVERRUN (0xC0000409)
+### 5.1 封包产物启动即崩溃（0xC0000409 / 0xC0000005）——已定位为 MinHook 兼容性（2026-09-15 更新）
+
+**现象**: 封包产物启动即崩溃；cDB/分析定位为两类签名：0xC0000409（FAST_FAIL_GUARD_ICALL_CHECK_FAILURE 或 abort）与 0xC0000005。
+
+**2026-09-15 修复后残留的唯一阻塞点（D3 专项）**: 打包管线已全面修复（见下），产物可以启动、Loader DLL 可以被 bootstrap 正常加载、VFS 区域解析通过（magic/版本/校验和全对），但 `Loader_Initialize → Hook_Install*/Hook_EnableAll` 阶段，MinHook（2019 年 vendored 版本）构建的 trampoline 在 Win11 26200 的系统 DLL（kernel32 等新指令编码）上执行即 AV（`jmp qword ptr [未提交页]`）。被 hook 的第一个 API 一被调用就崩。
+
+**后续专项建议**: 升级 vendored MinHook 到最新上游（HDE64 反汇编表更新），或替换为支持 Win11 25H2+ 的 hook 库（如即将支持的 hot-patch 友好方案）。
+
+**2026-09-15 已修复的根因链（历史存档）**:
+1. `PE_ModMergeImports` 三态逻辑全部损坏：常规 MSVC 镜像导入表无冗余空间 → 静默跳过仍返回成功（Loader 从未进导入表）；空表路径越界必返回 SECTION_FULL。
+2. `.NET` 单文件宿主尾部有 bundle overlay，新节 `PointerToRawData` 按"最后节末尾"计算与 overlay 碰撞，节内容与节头错位（现按文件总长对齐）。
+3. 入口点重定向到 CFG 位图之外的目标 → 线程启动即 `FAST_FAIL_GUARD_ICALL_CHECK_FAILURE`（现改为 entry-point bootstrap 方案：EP → .enibox 内 bootstrap 代码 LoadLibrary 旁置 Loader → 跳回原 EP，并清除 GUARD_CF）。
+4. stub 覆盖了 vfsTotalSize 与 VFS 头（现由宿主预留 stub 洞，布局自描述：+280 ep、+284 secRVA、+288 vfsTotal、+292 loaderSize、+296 VFS）。
+5. `VfsBuilder` 存储的 VFS 校验和是对"大小字段全零"的头部计算的（现先回写真实大小再计算）。
+6. `PackService` 现在把 `EniBox.Loader.dll` 旁置到产物同目录（bootstrap 的 LoadLibraryA 需要）。
+
+### 5.1.1（历史）fc.exe 在封包后 STATUS_STACK_BUFFER_OVERRUN (0xC0000409)
 
 **现象**: `E2E_PackedFcExe_ExitsNormally_NotHanging` 退出码 = 0xC0000409
 
-**原因**: fc.exe 是 Windows 系统二进制，Loader 的 hook 框架（MinHook + inline trampoline）在某些代码路径上不兼容 fc.exe 的入口 stub。这是 Loader 的已知限制，不影响 VFS 文件读取等核心功能。
+**原因**: 同上——Loader 的 hook 框架（MinHook + inline trampoline）兼容性限制（现归入 D3 专项）。
 
 **验证**: 看 `Assert.False(runResult.TimedOut, ...)` 通过即可（"不挂起"是核心要求，"正常退出码"不是）。
 

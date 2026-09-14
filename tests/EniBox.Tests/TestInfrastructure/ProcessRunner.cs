@@ -18,16 +18,13 @@ public sealed class ProcessRunner
     {
         var result = new ProcessRunner();
 
-        // .enibox files have no Windows file association, so CreateProcessW
-        // (used by UseShellExecute=false) cannot find an executable PE.
-        // Route through cmd.exe /c which uses the shell's command lookup,
-        // which accepts any PE regardless of extension. .exe paths go
-        // directly to avoid the extra cmd.exe layer.
-        var isEnibox = exePath.EndsWith(".enibox", StringComparison.OrdinalIgnoreCase);
-        var fileName = isEnibox ? "cmd.exe" : exePath;
-        var fileArgs = isEnibox
-            ? $"/c \"{exePath}\" {arguments}".Trim()
-            : arguments;
+        // CreateProcessW (UseShellExecute=false) accepts any valid PE regardless
+        // of file extension — .enibox outputs launch fine without a shell layer.
+        // (Routing through "cmd.exe /c \"exe\" args" is NOT an option: cmd's /c
+        // quote-stripping mangles quoted arguments, leaving literal quote
+        // characters inside paths -> ERROR_INVALID_NAME at CreateFile.)
+        var fileName = exePath;
+        var fileArgs = arguments;
 
         using var process = new Process
         {
