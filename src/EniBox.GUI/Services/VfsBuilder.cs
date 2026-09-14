@@ -221,7 +221,11 @@ namespace EniBox.GUI.Services
                 }
 
                 var fileDir = Path.GetDirectoryName(file.VirtualPath) ?? "";
-                uint dirIndex = 0;
+                // VFS_INVALID_INDEX: the C runtime (vfs_hashtable.c) treats this
+                // sentinel as "no parent directory". Defaulting to 0 would make
+                // it chase directory #0 (which may not exist) and the hash table
+                // would end up with a bare file name instead of the full path.
+                uint dirIndex = 0xFFFFFFFFu;
                 for (int d = 0; d < dirs.Count; d++)
                 {
                     if (GetFullPath(dirs[d]) == fileDir)
@@ -231,6 +235,12 @@ namespace EniBox.GUI.Services
                     }
                 }
 
+                // Callers may leave LastWriteTime unset (default = year 0001, outside
+                // the Win32 FILETIME range) — fall back to the source file's timestamp.
+                var lastWrite = file.LastWriteTime;
+                if (lastWrite == default)
+                    lastWrite = File.GetLastWriteTime(file.SourcePath);
+
                 fileEntries[i] = new VfsFileEntry
                 {
                     NameOffset = GetStringOffset(Path.GetFileName(file.VirtualPath)),
@@ -239,7 +249,7 @@ namespace EniBox.GUI.Services
                     DataSize = storeSize,
                     OriginalSize = (uint)fileSize,
                     Attributes = (uint)file.Attributes,
-                    LastWriteTime = (ulong)file.LastWriteTime.ToFileTime(),
+                    LastWriteTime = (ulong)lastWrite.ToFileTime(),
                     IsCompressed = isCompressed,
                     IsVirtualized = file.IsVirtualized ? (byte)1 : (byte)0
                 };
@@ -283,6 +293,12 @@ namespace EniBox.GUI.Services
                 header.MetadataSize = (uint)metadataStream.Length;
                 header.DataOffset = 0;
                 header.DataSize = (uint)dataStream.Length;
+
+                // Rewrite the header so metadataBytes carries the real offset/
+                // size fields (checksum still 0): the Loader verifies the CRC
+                // over exactly these final bytes.
+                metadataStream.Position = headerPos;
+                header.WriteTo(writer);
             }
 
             var metadataBytes = new byte[metadataStream.Length];
