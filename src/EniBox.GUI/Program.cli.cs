@@ -1,6 +1,7 @@
 #if CLI_MODE
 using System;
 using EniBox.GUI.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace EniBox.GUI
 {
@@ -31,7 +32,9 @@ namespace EniBox.GUI
                 return 0;
             }
 
-            var cli = new CliRunner();
+            var services = new ServiceCollection();
+            services.AddEniBoxServices();
+            var cli = new CliRunner(services.BuildServiceProvider());
             return cli.Run(args);
         }
     }
