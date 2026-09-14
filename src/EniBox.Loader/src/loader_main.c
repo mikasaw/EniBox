@@ -159,8 +159,16 @@ static void CleanupExtractedLoader(void) {
     }
 }
 
-int32_t Loader_Initialize(uint8_t* vfs_base, uint32_t vfs_size) {
-    if (g_initialized) return 0;
+/* Exported so the packer can import this DLL by name with a real resolved
+ * function: the Windows loader skips import descriptors whose ILT is empty
+ * (load-only imports), which would leave the packed process without the
+ * Loader entirely. */
+__declspec(dllexport) int32_t __stdcall EniBoxLoader_GetVersion(void)
+{
+    return 0x00010000; /* 1.0 */
+}
+
+int32_t Loader_Initialize(uint8_t* vfs_base, uint32_t vfs_size) {    if (g_initialized) return 0;
     int32_t result = VFS_Initialize(vfs_base, vfs_size);
     if (result != 0) return result;
     result = Hook_Initialize();
@@ -201,20 +209,22 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
              * Section layout (set by PackService.CombineSectionData + PeTool stub):
              *
              * x64: [stub:14][VA_placeholder:8][original_ep_rva:4][section_rva:4]
-             *      [vfs_total_size:4][VFS data...][Loader DLL bytes...]
+             *      [vfs_total_size:4][loader_total_size:4][VFS data...]
+             *      [Loader DLL bytes...][import table area]
              *
              * x86: [stub:6][VA_placeholder:4][original_ep_rva:4][section_rva:4]
-             *      [vfs_total_size:4][VFS data...][Loader DLL bytes...]
+             *      [vfs_total_size:4][loader_total_size:4][VFS data...]
+             *      [Loader DLL bytes...][import table area]
              *
-             * The vfs_total_size field tells us exactly how many bytes of VFS
-             * data follow, so we can correctly split VFS from the embedded
-             * Loader DLL bytes.
+             * The vfs_total_size field tells us how many bytes of VFS data
+             * follow, and loader_total_size gives the exact loader DLL size
+             * (the trailing import table area must not leak into the CRC).
              *
              * Steps:
              *   1. Read original_ep_rva and section_rva from metadata
              *   2. Compute ImageBase from the section's known VA
              *   3. Patch the VA placeholder with ImageBase + original_ep_rva
-             *   4. Read vfs_total_size to determine VFS data boundary
+             *   4. Read vfs_total_size / loader_total_size to split the regions
              *   5. Initialize VFS from the VFS data region
              *   6. Extract embedded Loader DLL to temp file for child process injection
              */
@@ -233,27 +243,32 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 }
             }
 
-            /* Calculate offsets based on architecture */
+            /* Bootstrap region layout (see PackService.CombineSectionData):
+             *   +208  jmp [rip+0] stub; VA placeholder at +214
+             *   +280  original_ep_rva, +284 section_rva
+             *   +288  vfs_total_size, +292 loader_total_size
+             *   +296  VFS data, loader DLL bytes */
             uint32_t stub_code_size, va_placeholder_offset, metadata_offset, vfs_data_offset;
             if (is_64bit) {
-                /* x64: sub rsp,0x28 (4) + add rsp,0x28 (4) + jmp [rip+0] (6) = 14 bytes code */
                 stub_code_size = 14;
-                va_placeholder_offset = 14;  /* 8-byte VA placeholder starts at offset 14 */
-                metadata_offset = 22;        /* original_ep_rva at offset 22 */
+                va_placeholder_offset = 214;
+                metadata_offset = 280;
             } else {
-                /* x86: push imm32 (5) + ret (1) = 6 bytes code */
+                /* x86 images are not produced by the current packer. */
                 stub_code_size = 6;
-                va_placeholder_offset = 1;   /* 4-byte VA placeholder at offset 1 (inside push) */
-                metadata_offset = 6;         /* original_ep_rva at offset 6 */
+                va_placeholder_offset = 1;
+                metadata_offset = 6;
             }
-            /* After metadata (8 bytes): vfs_total_size (4 bytes), then VFS data */
-            vfs_data_offset = metadata_offset + 8 + 4; /* ep_rva(4) + section_rva(4) + vfs_size(4) */
+            vfs_data_offset = metadata_offset + 16; /* ep(4) + sec(4) + vfs(4) + loader(4) */
+            if (is_64bit) vfs_data_offset = 296;    /* bootstrap(512) + vfs_total(4) + loader_total(4) */
 
             /* Read metadata */
             if (section_size >= vfs_data_offset) {
                 uint32_t original_ep_rva = *(uint32_t*)(section_base + metadata_offset);
                 uint32_t section_rva = *(uint32_t*)(section_base + metadata_offset + 4);
-                uint32_t vfs_total_size = *(uint32_t*)(section_base + metadata_offset + 8);
+                /* vfs/loader sizes live after the 296-byte bootstrap region */
+                uint32_t vfs_total_size = *(uint32_t*)(section_base + 288);
+                uint32_t loader_total_size = *(uint32_t*)(section_base + 292);
                 g_original_entry_rva = original_ep_rva;
 
                 /* Compute ImageBase: section_base = ImageBase + section_rva */
@@ -275,15 +290,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
                 /* Initialize VFS from the VFS data region */
                 uint32_t vfs_end_offset = vfs_data_offset + vfs_total_size;
+                /* Initialize VFS + hooks */
+                uint32_t vfs_end_offset = vfs_data_offset + vfs_total_size;
                 if (vfs_total_size > 0 && vfs_end_offset <= section_size) {
                     Loader_Initialize(section_base + vfs_data_offset, vfs_total_size);
                 }
 
-                /* Extract embedded Loader DLL for child process injection */
-                if (vfs_end_offset < section_size) {
-                    uint32_t loader_size = section_size - vfs_end_offset;
+                /* Extract embedded Loader DLL for child process injection.
+                 * loader_total_size is the exact DLL size written by the
+                 * packer, so the trailing import table area never leaks
+                 * into the extracted bytes (CRC would fail otherwise). */
+                if (loader_total_size >= 2 &&
+                    vfs_end_offset <= section_size &&
+                    loader_total_size <= section_size - vfs_end_offset) {
                     uint8_t* loader_data = section_base + vfs_end_offset;
-                    if (ExtractEmbeddedLoader(loader_data, loader_size)) {
+                    if (ExtractEmbeddedLoader(loader_data, loader_total_size)) {
                         /* Use the extracted path for child process injection
                          * instead of the currently loaded DLL's path.
                          * This ensures child processes get the correct Loader
