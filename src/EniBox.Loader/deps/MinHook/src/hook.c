@@ -23,6 +23,8 @@ typedef struct _HOOK_ENTRY {
     size_t  trampolineSize;
     BOOL    enabled;
     BOOL    created;
+    BOOL    isThunk;      /* Target is a rip-relative jmp/call thunk */
+    void*   relay;        /* Near relay block when detour is out of rel32 range */
     /* Original bytes saved for unhooking */
     uint8_t origBytes[16];
     size_t  origSize;
@@ -267,7 +269,98 @@ static size_t GetHookSize(void* pTarget) {
 
 /* ---- Trampoline and patching ---- */
 
+/* Detect a "thunk-style" target: the whole function is one position-dependent
+ * control transfer (jmp/call [rip+disp32] or jmp rel32). Copying such bytes
+ * into a trampoline breaks their rip-relative displacement (observed as an
+ * access violation on Win11 26200 system DLLs), and the bytes after the jmp
+ * belong to a different function, so they must not be stolen either.
+ * Instead: remember the real target address and patch the 6-byte thunk. */
+static int IsThunkTarget(void* pTarget, uintptr_t* origTargetOut) {
+    uint8_t* p = (uint8_t*)pTarget;
+    if (p[0] == 0xFF && p[1] == 0x25) {
+        uintptr_t slot = (uintptr_t)p + 6 + *(int32_t*)(p + 2);
+        *origTargetOut = *(uintptr_t*)slot; /* slot lives in the module image; readable */
+        return 1;
+    }
+    if (p[0] == 0xE9) {
+        *origTargetOut = (uintptr_t)p + 5 + *(int32_t*)(p + 1);
+        return 1;
+    }
+    return 0;
+}
+
+static int32_t delta_of(const void* orig, const void* copy) {
+    return (int32_t)((uintptr_t)copy - (uintptr_t)orig);
+}
+
+/* Fix up position-dependent instructions in the copied prologue: rel32
+ * branches, rel8 short branches and rip-relative FF 15/FF 25 thunks. */
+static void RelocateCopiedCode(uint8_t* orig, uint8_t* copy, size_t len) {
+    int64_t delta = (int64_t)((uintptr_t)copy - (uintptr_t)orig);
+    size_t pos = 0;
+    while (pos < len) {
+        uint8_t* o = orig + pos;
+        uint8_t* c = copy + pos;
+        if (o[0] == 0xE9 || o[0] == 0xE8) {
+            *(int32_t*)(c + 1) += (int32_t)delta;
+            pos += 5;
+        } else if (o[0] == 0xEB || (o[0] & 0xF0) == 0x70) {
+            *(int8_t*)(c + 1) += (int8_t)delta;
+            pos += 2;
+        } else if (o[0] == 0xFF && (o[1] == 0x15 || o[1] == 0x25)) {
+            *(int32_t*)(c + 2) += (int32_t)delta;
+            pos += 6;
+        } else {
+            pos += GetInstructionLength(o);
+        }
+    }
+}
+
+/* Allocate an executable block within +-1GB of pTarget so a rel32 jmp can
+ * reach it. */
+static void* AllocateRelayNear(void* pTarget) {
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    uintptr_t target = (uintptr_t)pTarget;
+    const uintptr_t span = 0x40000000ull; /* 1GB */
+    uintptr_t minAddr = (uintptr_t)si.lpMinimumApplicationAddress;
+    uintptr_t page = (target > span) ? (target - span) : minAddr;
+    uintptr_t maxAddr = target + span;
+    if (page < minAddr) page = minAddr;
+    page &= ~(uintptr_t)0xFFFF; /* 64KB align */
+    while (page < maxAddr) {
+        void* p = VirtualAlloc((void*)page, 0x10000,
+                               MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (p) return p;
+        page += 0x10000;
+    }
+    return NULL;
+}
+
 static MH_STATUS CreateTrampoline(HOOK_ENTRY* hook) {
+    uintptr_t thunkOrig = 0;
+    if (IsThunkTarget(hook->target, &thunkOrig)) {
+        /* Trampoline = mov rax, <real target>; jmp rax.
+         * Callers pass through to the original function unchanged. */
+        void* trampoline = VirtualAlloc(NULL, 32,
+                                        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (!trampoline)
+            return MH_ERROR_MEMORY_ALLOC;
+        uint8_t* t = (uint8_t*)trampoline;
+        t[0] = 0x48; t[1] = 0xB8;
+        *(uintptr_t*)(t + 2) = thunkOrig;
+        t[10] = 0xFF; t[11] = 0xE0;
+
+        hook->trampoline = trampoline;
+        hook->trampolineSize = 32;
+        hook->original = trampoline;
+        hook->isThunk = TRUE;
+        memcpy(hook->origBytes, hook->target, 6);
+        hook->origSize = 6;
+        return MH_OK;
+    }
+    hook->isThunk = FALSE;
+
     size_t hookSize = GetHookSize(hook->target);
     if (hookSize == 0 || hookSize > sizeof(hook->origBytes))
         return MH_ERROR_UNSUPPORTED_FUNCTION;
@@ -288,6 +381,8 @@ static MH_STATUS CreateTrampoline(HOOK_ENTRY* hook) {
 
     /* Copy original instructions to trampoline */
     memcpy(trampoline, hook->origBytes, hookSize);
+    /* Position-dependent instructions must be fixed up for the new address */
+    RelocateCopiedCode(hook->target, (uint8_t*)trampoline, hookSize);
 
     /* Append a jump back to the original function (after the stolen bytes) */
     uint8_t* jumpBack = (uint8_t*)trampoline + hookSize;
@@ -311,12 +406,39 @@ static MH_STATUS CreateTrampoline(HOOK_ENTRY* hook) {
 }
 
 static MH_STATUS PatchTarget(HOOK_ENTRY* hook) {
+    uint8_t* pTarget = (uint8_t*)hook->target;
+
+    if (hook->isThunk) {
+        /* Overwrite the 6-byte thunk with a rel32 jmp to the detour; when
+         * out of rel32 range, hop through a relay block allocated nearby. */
+        int64_t rel = (int64_t)((uintptr_t)hook->detour - ((uintptr_t)pTarget + 5));
+        if (rel < INT32_MIN || rel > INT32_MAX) {
+            void* relay = AllocateRelayNear(pTarget);
+            if (!relay)
+                return MH_ERROR_MEMORY_ALLOC;
+            uint8_t* r = (uint8_t*)relay;
+            r[0] = 0x48; r[1] = 0xB8;
+            *(uintptr_t*)(r + 2) = (uintptr_t)hook->detour;
+            r[10] = 0xFF; r[11] = 0xE0;
+            hook->relay = relay;
+            rel = (int64_t)((uintptr_t)relay - ((uintptr_t)pTarget + 5));
+        }
+        DWORD oldProtect;
+        if (!VirtualProtect(hook->target, hook->origSize, PAGE_EXECUTE_READWRITE, &oldProtect))
+            return MH_ERROR_MEMORY_PROTECT;
+        pTarget[0] = 0xE9; /* jmp rel32 */
+        *(int32_t*)(pTarget + 1) = (int32_t)rel;
+        pTarget[5] = 0x90;
+        DWORD dummy0;
+        VirtualProtect(hook->target, hook->origSize, oldProtect, &dummy0);
+        FlushInstructionCache(GetCurrentProcess(), hook->target, hook->origSize);
+        return MH_OK;
+    }
+
     /* Change memory protection */
     DWORD oldProtect;
     if (!VirtualProtect(hook->target, hook->origSize, PAGE_EXECUTE_READWRITE, &oldProtect))
         return MH_ERROR_MEMORY_PROTECT;
-
-    uint8_t* pTarget = (uint8_t*)hook->target;
 
 #ifdef _WIN64
     /* x64: push rax; mov rax, detour; xchg [rsp], rax; ret */
@@ -386,6 +508,8 @@ MH_STATUS MH_Uninitialize(void) {
             UnpatchTarget(&g_hooks[i]);
         if (g_hooks[i].trampoline)
             VirtualFree(g_hooks[i].trampoline, 0, MEM_RELEASE);
+        if (g_hooks[i].relay)
+            VirtualFree(g_hooks[i].relay, 0, MEM_RELEASE);
     }
 
     g_hookCount = 0;

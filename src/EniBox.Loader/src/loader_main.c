@@ -288,8 +288,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     }
                 }
 
-                /* Initialize VFS from the VFS data region */
-                uint32_t vfs_end_offset = vfs_data_offset + vfs_total_size;
                 /* Initialize VFS + hooks */
                 uint32_t vfs_end_offset = vfs_data_offset + vfs_total_size;
                 if (vfs_total_size > 0 && vfs_end_offset <= section_size) {

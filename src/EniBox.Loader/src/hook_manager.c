@@ -37,10 +37,16 @@ void Hook_Uninitialize(void) {
 }
 int32_t Hook_InstallFileHooks(void) {
     int32_t r = HookFile_Install(); if (r != 0) return r;
-    r = HookNt_Install(); if (r != 0) return r;
+    /* NT-level (NtCreateFile/NtOpenFile/NtReadFile) inline hooks are disabled:
+     * Win11 25H2+ syscall stubs contain instance-dependent integrity
+     * instructions that cannot be copied into a trampoline (D3). Win32-level
+     * hooks cover normal Win32 applications. */
     r = HookFind_Install(); if (r != 0) return r;
     r = HookMapping_Install(); if (r != 0) return r;
     return 0;
 }
-int32_t Hook_InstallProcessHooks(void) { return HookProcess_Install(); }
+int32_t Hook_InstallProcessHooks(void) {
+    /* Disabled: the process-creation chain has the same trampoline gap (D3). */
+    return 0;
+}
 int32_t Hook_InstallRegistryHooks(void) { return HookRegistry_Install(); }
