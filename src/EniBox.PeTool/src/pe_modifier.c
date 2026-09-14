@@ -3,12 +3,17 @@
 #include "crc32.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 static uint32_t AlignUp(uint32_t value, uint32_t alignment)
 {
     if (alignment == 0) return value;
     return (value + alignment - 1) & ~(alignment - 1);
 }
+
+/* The one function the packer resolves from EniBox.Loader.dll; see
+ * PE_ModMergeImports. */
+static const char ENIBOX_LOADER_FUNC[] = "EniBoxLoader_GetVersion";
 
 /* Helper: Convert RVA to file offset */
 static uint32_t RvaToFileOffset(PE_CONTEXT* ctx, uint32_t rva)
@@ -71,9 +76,12 @@ int32_t PE_ModAddSection(PE_CONTEXT* ctx, const char* name,
     new_header.Misc.VirtualSize = virtual_size;
     new_header.VirtualAddress = new_section_rva;
     new_header.SizeOfRawData = raw_data_size;
-    new_header.PointerToRawData = AlignUp(
-        last_section->PointerToRawData + last_section->SizeOfRawData,
-        ctx->file_alignment);
+    /* Base the file position on the END OF FILE, not the end of the last
+     * section: .NET single-file hosts (and similar tools) append an overlay
+     * bundle after the last section. Anchoring on the last section would
+     * collide with that overlay and desync the section header from where
+     * the data actually lands (both the overlay and our section corrupt). */
+    new_header.PointerToRawData = AlignUp((uint32_t)ctx->file_size, ctx->file_alignment);
     new_header.Characteristics = characteristics;
 
     if (ctx->new_section_data) {
@@ -100,17 +108,34 @@ int32_t PE_ModAddSection(PE_CONTEXT* ctx, const char* name,
         nt32->OptionalHeader.SizeOfImage = new_size_of_image;
     }
 
-    /* If this is the .enibox section, build entry point stub and set new entry point */
+    /* If this is the .enibox section, redirect the entry point to the
+     * bootstrap code the host placed at the section start, and make the
+     * redirect possible on CFG-enabled images by clearing GUARD_CF.
+     *
+     * The bootstrap loads EniBox.Loader.dll (sidecar) through LoadLibraryA
+     * resolved via the PEB, then jumps to the original entry point through
+     * the jmp stub written here; the Loader's DllMain patches that stub's
+     * VA placeholder (ImageBase + original ep) and initializes the VFS
+     * before the jump. Layout: stub at +208, VA at +214, ep at +280,
+     * section rva at +284 (see PackService.CombineSectionData). */
     if (strncmp(name, ".enibox", 7) == 0) {
-        uint8_t stub[128];
-        uint32_t stub_size = PE_ModBuildEntryPointStub(
-            ctx, ctx->entry_point_rva, new_section_rva, stub, sizeof(stub));
-
-        if (stub_size > 0 && stub_size <= data_size) {
-            /* Prepend the stub to the section data */
-            memcpy(ctx->new_section_data, stub, stub_size);
-            /* Set new entry point to the stub at the start of the section */
+        uint32_t stubOff = 208;
+        if (ctx->new_section_data && ctx->new_section_size >= stubOff + 24) {
+            uint8_t* stub = ctx->new_section_data + stubOff;
+            stub[0] = 0xFF;
+            stub[1] = 0x25;
+            stub[2] = stub[3] = stub[4] = stub[5] = 0; /* jmp [rip+0] */
+            *(uint64_t*)(stub + 6) = (uint64_t)ctx->entry_point_rva; /* VA placeholder (RVA; patched by Loader) */
+            *(uint32_t*)(ctx->new_section_data + 280) = ctx->entry_point_rva;
+            *(uint32_t*)(ctx->new_section_data + 284) = new_section_rva;
+            /* Patch the bootstrap's final `jmp` target: exe base + (section rva + stub offset). */
+            *(uint32_t*)(ctx->new_section_data + 167) = new_section_rva + stubOff;
             PE_ModSetEntryPoint(ctx, new_section_rva);
+            if (ctx->is_64bit) {
+                ((IMAGE_NT_HEADERS64*)nt)->OptionalHeader.DllCharacteristics &= ~0x4000; /* IMAGE_DLLCHARACTERISTICS_GUARD_CF */
+            } else {
+                ((IMAGE_NT_HEADERS32*)nt)->OptionalHeader.DllCharacteristics &= ~0x4000;
+            }
         }
     }
 
@@ -147,213 +172,167 @@ int32_t PE_ModMergeImports(PE_CONTEXT* ctx, const IMPORT_ENTRY* entries, uint32_
         ? &((IMAGE_NT_HEADERS64*)nt)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT]
         : &((IMAGE_NT_HEADERS32*)nt)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
 
-    if (importDir->VirtualAddress == 0 || importDir->Size == 0) {
-        /* No existing import directory - the EXE has no imports.
-         * We'll create a new import directory in the .enibox section. */
+    /*
+     * Rebuild the import table inside the .enibox section's trailing import
+     * area (reserved by the host after the loader DLL bytes).
+     *
+     * Why not append into the existing table? MSVC-linked images size the
+     * import directory exactly (no slack), so an in-place append never fits.
+     * The old code silently skipped the merge in that case and still returned
+     * PE_SUCCESS, leaving the packed EXE without its Loader import — fatal at
+     * load time. Any failure now is reported to the caller.
+     *
+     * .enibox layout (self-describing, written by the host + PE_ModAddSection):
+     *   [0..stub_total-1]     entry stub code + VA placeholder + ep_rva + section_rva
+     *   [stub_total+0..+3]    vfs_total_size
+     *   [stub_total+4..+7]    loader_total_size
+     *   [stub_total+8..]      VFS data + loader DLL bytes + import area
+     *
+     * Existing descriptors are copied verbatim — their Name/ILT/IAT RVAs still
+     * point into the original sections, so the Windows loader resolves them
+     * exactly as before. The new entries are load-only (empty ILT/IAT): the
+     * loader loads the DLL and runs its DllMain without resolving functions.
+     */
+    if (!ctx->new_section_data || ctx->new_section_size == 0)
+        return PE_ERR_IMPORT_MERGE;
 
-        if (!ctx->new_section_data || ctx->new_section_size == 0)
-            return PE_ERR_NO_MEMORY;
-
-        /* Find the .enibox section RVA */
-        IMAGE_SECTION_HEADER* sections = (IMAGE_SECTION_HEADER*)ctx->section_table;
-        uint32_t eniboxRva = 0;
-        for (uint32_t i = 0; i < nt->FileHeader.NumberOfSections; i++) {
-            if (memcmp(sections[i].Name, ".enibox", 8) == 0) {
-                eniboxRva = sections[i].VirtualAddress;
-                break;
-            }
-        }
-        if (eniboxRva == 0)
-            return PE_ERR_SECTION_FULL;
-
-        /* Layout in .enibox section (from current new_section_size offset):
-         *   [IMAGE_IMPORT_DESCRIPTOR * (count+1)]  - import descriptors + null terminator
-         *   [DLL name strings]                     - one per entry
-         *   [ILT entries]                          - one null terminator per entry
-         *   [IAT entries]                          - one null terminator per entry
-         */
-        uint32_t descSize = (count + 1) * sizeof(IMAGE_IMPORT_DESCRIPTOR);
-        uint32_t offset = (uint32_t)ctx->new_section_size;
-
-        /* Calculate total space needed */
-        uint32_t totalNeeded = descSize;
-        for (uint32_t i = 0; i < count; i++) {
-            totalNeeded += (uint32_t)strlen(entries[i].dll_name) + 1; /* DLL name */
-            totalNeeded += ctx->is_64bit ? sizeof(uint64_t) : sizeof(uint32_t); /* ILT null */
-            totalNeeded += ctx->is_64bit ? sizeof(uint64_t) : sizeof(uint32_t); /* IAT null */
-        }
-
-        if (offset + totalNeeded > ctx->new_section_size)
-            return PE_ERR_SECTION_FULL;
-
-        /* Write import descriptors first (we'll fill them in after writing strings/ILT/IAT) */
-        uint32_t descOffset = offset;
-        offset += descSize;
-
-        for (uint32_t i = 0; i < count; i++) {
-            /* Write DLL name string */
-            uint32_t nameRva = eniboxRva + offset;
-            uint32_t nameLen = (uint32_t)strlen(entries[i].dll_name) + 1;
-            memcpy(ctx->new_section_data + offset, entries[i].dll_name, nameLen);
-            offset += nameLen;
-
-            /* Write ILT (null-terminated) */
-            uint32_t iltRva = eniboxRva + offset;
-            if (ctx->is_64bit) {
-                *(uint64_t*)(ctx->new_section_data + offset) = 0;
-                offset += sizeof(uint64_t);
-            } else {
-                *(uint32_t*)(ctx->new_section_data + offset) = 0;
-                offset += sizeof(uint32_t);
-            }
-
-            /* Write IAT (same as ILT initially) */
-            uint32_t iatRva = eniboxRva + offset;
-            if (ctx->is_64bit) {
-                *(uint64_t*)(ctx->new_section_data + offset) = 0;
-                offset += sizeof(uint64_t);
-            } else {
-                *(uint32_t*)(ctx->new_section_data + offset) = 0;
-                offset += sizeof(uint32_t);
-            }
-
-            /* Fill in the import descriptor */
-            IMAGE_IMPORT_DESCRIPTOR* desc = (IMAGE_IMPORT_DESCRIPTOR*)(ctx->new_section_data + descOffset + i * sizeof(IMAGE_IMPORT_DESCRIPTOR));
-            desc->OriginalFirstThunk = iltRva;
-            desc->TimeDateStamp = 0;
-            desc->ForwarderChain = 0;
-            desc->Name = nameRva;
-            desc->FirstThunk = iatRva;
-        }
-
-        /* Null terminator descriptor */
-        memset(ctx->new_section_data + descOffset + count * sizeof(IMAGE_IMPORT_DESCRIPTOR),
-               0, sizeof(IMAGE_IMPORT_DESCRIPTOR));
-
-        /* Update the import directory data directory to point to our new import table */
-        importDir->VirtualAddress = eniboxRva + descOffset;
-        importDir->Size = descSize;
-
-        ctx->modified = TRUE;
-        return PE_SUCCESS;
-    }
-
-    /* Calculate the existing import table location */
-    uint32_t importRVA = importDir->VirtualAddress;
-    uint32_t importSize = importDir->Size;
-
-    IMAGE_IMPORT_DESCRIPTOR* importDesc = NULL;
-    uint32_t existingCount = 0;
-
+    /* Find the .enibox section RVA */
     IMAGE_SECTION_HEADER* sections = (IMAGE_SECTION_HEADER*)ctx->section_table;
+    uint32_t eniboxRva = 0;
     for (uint32_t i = 0; i < nt->FileHeader.NumberOfSections; i++) {
-        uint32_t secStart = sections[i].VirtualAddress;
-        uint32_t secEnd = secStart + sections[i].Misc.VirtualSize;
-        if (importRVA >= secStart && importRVA < secEnd) {
-            uint32_t fileOffset = sections[i].PointerToRawData + (importRVA - secStart);
-            importDesc = (IMAGE_IMPORT_DESCRIPTOR*)(ctx->file_buffer + fileOffset);
+        if (memcmp(sections[i].Name, ".enibox", 8) == 0) {
+            eniboxRva = sections[i].VirtualAddress;
             break;
         }
     }
+    if (eniboxRva == 0)
+        return PE_ERR_SECTION_FULL;
 
-    if (importDesc) {
-        while (importDesc[existingCount].Name != 0) {
-            existingCount++;
-        }
+    /* Decode the section layout to locate the trailing import area */
+    uint32_t stub_total = ctx->is_64bit ? 30u : 14u;
+    if (ctx->new_section_size < stub_total + 8)
+        return PE_ERR_IMPORT_MERGE;
 
-        uint32_t usedSpace = (existingCount + 1) * sizeof(IMAGE_IMPORT_DESCRIPTOR);
-        uint32_t neededSpace = usedSpace + count * sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    uint32_t vfs_total_size = *(uint32_t*)(ctx->new_section_data + stub_total);
+    uint32_t loader_total_size = *(uint32_t*)(ctx->new_section_data + stub_total + 4);
+    /* Align the import area so the rebuilt descriptor table and its IAT
+     * slots sit at naturally-aligned RVAs — the loader refuses to walk an
+     * import directory whose RVA is misaligned. */
+    uint32_t importAreaOffset = AlignUp(stub_total + 8 + vfs_total_size + loader_total_size, 8);
+    if (importAreaOffset < stub_total + 8 || importAreaOffset >= ctx->new_section_size)
+        return PE_ERR_IMPORT_MERGE; /* layout fields corrupted or no import area reserved */
 
-        if (neededSpace <= importSize) {
-            /* Enough space to append new import descriptors in the existing import table.
-             * We need to:
-             *   1. Write DLL name strings in the .enibox section
-             *   2. Create ILT (Import Lookup Table) and IAT (Import Address Table) entries
-             *   3. Fill in the IMAGE_IMPORT_DESCRIPTOR fields
-             *
-             * For each import entry, we need:
-             *   - DLL name string (NUL-terminated) in the new section
-             *   - ILT: one entry with ordinal/name hint, terminated by 0
-             *   - IAT: same as ILT (will be overwritten by loader at runtime)
-             *   - IMPORT_DESCRIPTOR: OriginalFirstThunk->ILT, FirstThunk->IAT, Name->DLL name
-             *
-             * Since we're adding the Loader DLL as a simple import (no specific functions),
-             * we create a minimal ILT/IAT with just a null terminator.
-             * The Loader's DllMain will handle initialization.
-             */
-            if (ctx->new_section_data && ctx->new_section_size > 0) {
-                /* Find the .enibox section RVA */
-                uint32_t eniboxRva = 0;
-                for (uint32_t i = 0; i < nt->FileHeader.NumberOfSections; i++) {
-                    if (memcmp(sections[i].Name, ".enibox", 8) == 0) {
-                        eniboxRva = sections[i].VirtualAddress;
-                        break;
-                    }
-                }
-
-                if (eniboxRva != 0) {
-                    /* Allocate space at the end of the new section data for import structures */
-                    uint32_t dataOffset = (uint32_t)ctx->new_section_size;
-
-                    for (uint32_t i = 0; i < count; i++) {
-                        uint32_t nameLen = (uint32_t)strlen(entries[i].dll_name) + 1; /* NUL terminator */
-
-                        /* Check if we have space in the section data */
-                        if (dataOffset + nameLen + 2 * sizeof(uint32_t) > ctx->new_section_size) {
-                            /* Not enough space - skip this entry */
-                            continue;
-                        }
-
-                        /* Write DLL name string */
-                        uint32_t nameRva = eniboxRva + dataOffset;
-                        memcpy(ctx->new_section_data + dataOffset, entries[i].dll_name, nameLen);
-                        dataOffset += nameLen;
-
-                        /* Write ILT (null-terminated, no function imports) */
-                        uint32_t iltRva = eniboxRva + dataOffset;
-                        if (ctx->is_64bit) {
-                            *(uint64_t*)(ctx->new_section_data + dataOffset) = 0; /* null terminator */
-                            dataOffset += sizeof(uint64_t);
-                        } else {
-                            *(uint32_t*)(ctx->new_section_data + dataOffset) = 0; /* null terminator */
-                            dataOffset += sizeof(uint32_t);
-                        }
-
-                        /* Write IAT (same as ILT initially) */
-                        uint32_t iatRva = eniboxRva + dataOffset;
-                        if (ctx->is_64bit) {
-                            *(uint64_t*)(ctx->new_section_data + dataOffset) = 0; /* null terminator */
-                            dataOffset += sizeof(uint64_t);
-                        } else {
-                            *(uint32_t*)(ctx->new_section_data + dataOffset) = 0; /* null terminator */
-                            dataOffset += sizeof(uint32_t);
-                        }
-
-                        /* Fill in the import descriptor */
-                        uint32_t insertPos = existingCount + i;
-                        IMAGE_IMPORT_DESCRIPTOR* target = &importDesc[insertPos];
-                        target->OriginalFirstThunk = iltRva;
-                        target->TimeDateStamp = 0;
-                        target->ForwarderChain = 0;
-                        target->Name = nameRva;
-                        target->FirstThunk = iatRva;
-                    }
-
-                    /* Write new null terminator after all new entries */
-                    memset(&importDesc[existingCount + count], 0, sizeof(IMAGE_IMPORT_DESCRIPTOR));
-
-                    /* Update import directory size */
-                    importDir->Size = (DWORD)neededSpace;
-                }
+    /* Count the descriptors in the original import table (bounds-checked) */
+    uint32_t existingCount = 0;
+    uint32_t importFileOffset = 0;
+    if (importDir->VirtualAddress != 0) {
+        importFileOffset = RvaToFileOffset(ctx, importDir->VirtualAddress);
+        if (importFileOffset != 0 && importFileOffset < ctx->file_size) {
+            const IMAGE_IMPORT_DESCRIPTOR* desc =
+                (const IMAGE_IMPORT_DESCRIPTOR*)(ctx->file_buffer + importFileOffset);
+            while (existingCount < 4096 &&
+                   importFileOffset + (existingCount + 1) * sizeof(IMAGE_IMPORT_DESCRIPTOR) <= ctx->file_size &&
+                   desc[existingCount].Name != 0) {
+                existingCount++;
             }
-
-            ctx->modified = TRUE;
-            return PE_SUCCESS;
         }
     }
 
-    /* Not enough space in existing import table or import table not found.
-     * The entry point stub approach will handle Loader initialization instead. */
+    /* Size the rebuilt table: descriptors + name strings + ILT/hint-name/FT
+     * for the new entries. Existing descriptors are copied verbatim: their
+     * Name/ILT/IAT RVAs keep pointing at the original sections — program code
+     * references those FirstThunk addresses directly (RIP-relative), so they
+     * must never move. */
+    uint32_t thunkSize = ctx->is_64bit ? sizeof(uint64_t) : sizeof(uint32_t);
+    IMAGE_DATA_DIRECTORY* iatDir = ctx->is_64bit
+        ? &((IMAGE_NT_HEADERS64*)nt)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT]
+        : &((IMAGE_NT_HEADERS32*)nt)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT];
+    uint32_t descSize = (existingCount + count + 1) * (uint32_t)sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    uint32_t tailSize = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        tailSize += (uint32_t)strlen(entries[i].dll_name) + 1; /* DLL name */
+        tailSize += thunkSize; /* ILT: single thunk entry + terminator slot */
+        tailSize += 2 + (uint32_t)strlen(ENIBOX_LOADER_FUNC) + 1; /* IMAGE_IMPORT_BY_NAME (hint + name) */
+        tailSize += thunkSize; /* FT slot: the loader writes the resolved address here */
+    }
+    uint32_t totalNeeded = descSize + tailSize;
+
+    if (importAreaOffset + totalNeeded > ctx->new_section_size)
+        return PE_ERR_SECTION_FULL; /* import area too small — fail loudly */
+
+    uint8_t* area = ctx->new_section_data + importAreaOffset;
+    uint32_t areaRva = eniboxRva + importAreaOffset;
+
+    /* Copy the existing descriptors verbatim */
+    if (existingCount > 0) {
+        memcpy(area, ctx->file_buffer + importFileOffset,
+               existingCount * sizeof(IMAGE_IMPORT_DESCRIPTOR));
+    }
+
+    /* Append the new entries.
+     *
+     * The import MUST resolve a real function: the Windows loader skips
+     * import descriptors whose ILT is empty ("load-only" imports), which
+     * would leave the packed process without the Loader. EniBox.Loader.dll
+     * exports EniBoxLoader_GetVersion for exactly this purpose — resolving
+     * it is harmless and guarantees DllMain runs. The FT slot lives in the
+     * .enibox import area, which is writable (the IAT directory below is
+     * dropped, so the loader snaps without de-protecting a fixed range). */
+    uint32_t target_ft_rva = 0;
+    uint32_t offset = descSize;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t nameLen = (uint32_t)strlen(entries[i].dll_name) + 1;
+        uint32_t nameRva = areaRva + offset;
+        memcpy(area + offset, entries[i].dll_name, nameLen);
+        offset += nameLen;
+
+        /* IMAGE_IMPORT_BY_NAME: 2-byte hint + function name */
+        uint32_t hintRva = areaRva + offset;
+        *(uint16_t*)(area + offset) = 0; /* hint */
+        offset += 2;
+        uint32_t funcLen = (uint32_t)strlen(ENIBOX_LOADER_FUNC) + 1;
+        memcpy(area + offset, ENIBOX_LOADER_FUNC, funcLen);
+        offset += funcLen;
+
+        /* ILT: single by-name thunk (bit 63 / bit 31 clear = import by name);
+         * keep it 8-aligned. */
+        offset = (offset + 7) & ~7u;
+        uint32_t iltRva = areaRva + offset;
+        if (ctx->is_64bit)
+            *(uint64_t*)(area + offset) = hintRva;
+        else
+            *(uint32_t*)(area + offset) = hintRva;
+        offset += thunkSize;
+
+        /* FT slot: the loader overwrites it with the resolved function
+         * address. Nothing in the packed image calls through it. */
+        uint32_t iatRva = areaRva + offset;
+        memset(area + offset, 0, thunkSize);
+        offset += thunkSize;
+
+        IMAGE_IMPORT_DESCRIPTOR* target =
+            &((IMAGE_IMPORT_DESCRIPTOR*)area)[existingCount + i];
+        target->OriginalFirstThunk = iltRva;
+        target->TimeDateStamp = 0;
+        target->ForwarderChain = 0;
+        target->Name = nameRva;
+        target->FirstThunk = iatRva;
+    }
+
+    /* Null terminator descriptor */
+    memset(&((IMAGE_IMPORT_DESCRIPTOR*)area)[existingCount + count],
+           0, sizeof(IMAGE_IMPORT_DESCRIPTOR));
+
+    /* NOTE: DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT] is deliberately left
+     * untouched. Experiments on Win11 26200 showed that zeroing it or
+     * extending it across section boundaries breaks import processing
+     * outright; leaving the original IAT directory in place lets the loader
+     * process both the original and the appended descriptors. */
+
+    /* Repoint the import directory at the rebuilt table */
+    importDir->VirtualAddress = areaRva;
+    importDir->Size = descSize;
+
     ctx->modified = TRUE;
     return PE_SUCCESS;
 }
