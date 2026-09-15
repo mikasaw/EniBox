@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 jobs:
   dotnet-build:
@@ -14,6 +14,11 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.x'
+      - uses: microsoft/setup-msbuild@v2
+      - name: 编译 native DLLs (GUI csproj 的 Content 依赖)
+        run: |
+          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
       - run: dotnet restore
       - run: dotnet build -c Release --no-restore
 
@@ -22,7 +27,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
-      - run: msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+      # GitHub runner 只有 VS2022/v143；本地开发用 v145，CI 侧显式降级
+      - run: |
+          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
 
   dotnet-test:
     needs: [dotnet-build, msvc-build]
@@ -47,8 +55,8 @@ jobs:
       - uses: microsoft/setup-msbuild@v2
       - name: 编译 native DLLs (PeTool + Loader)
         run: |
-          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
-          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
       - name: 编译 GUI + Tests
         run: |
           dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release --nologo -v:minimal
@@ -79,8 +87,8 @@ jobs:
       - uses: microsoft/setup-msbuild@v2
       - name: 编译 native DLLs (PeTool + Loader)
         run: |
-          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
-          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
       - name: 编译 CLI_MODE 变体 (EniBox.CLI)
         run: dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release -p:CLI_MODE=true --nologo -v:minimal
       - name: CLI 冒烟 (--help)
