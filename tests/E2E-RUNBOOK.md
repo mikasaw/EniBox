@@ -185,6 +185,21 @@ Add-MpPreference -ExclusionPath "$env:TEMP\EniBox-E2E-*"
 ```
 CI（GitHub Actions Windows runner）默认无实时防护隔离此类文件，不受影响。
 
+### 5.1.3 真实第三方应用冒烟（2026-09-16）
+
+开发机（Win11 26200 x64）实测，DiagPack 封包、默认配置（子进程注入开）：
+
+| 应用 | 版本 | 场景 | 结果 |
+|---|---|---|---|
+| curl.exe (System32) | 8.21.0 | `--version` / `--help` / `curl -o <file> file:///<file>` 真实下载落盘 | 全部 ✓，版本横幅与原生逐字节一致，下载文件内容正确 |
+| git.exe (mingw64/bin 主二进制 + 全套 DLL 便携布局) | 2.55.0.windows.3 | `--version` / 真实仓库内 `status --short` | ✓ 版本一致；仓库内枚举语义正确（干净树输出为空，非仓库目录报 not a git repository） |
+
+注意事项：
+- `Git\cmd\git.exe` 是安装根自定位的包装器，封包后移出安装目录会报
+  "Top-level not found"——这是包装器自身的预期行为，请封包
+  `mingw64in\git.exe`（连同其 DLL 依赖）并保持便携布局。
+- 更多应用（写配置类、插件目录类）待补。
+
 ### 5.2 Standalone VfsTest.exe 跑出大量 FAIL
 
 **现象**: 直接运行 `publish\VfsTest.exe`（未封包）输出 `CHECK:FAIL:test_VfsFileRead` 等。
