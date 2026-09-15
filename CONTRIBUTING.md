@@ -15,7 +15,7 @@
 
 ### 可选工具
 
-- **MinHook** — 已作为子模块包含，用于 API Hook
+- **MinHook** — 以源码形式随仓库分发（vendor，非 git submodule），用于 API Hook，内含 HDE 反汇编器；许可声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
 - **LZMA SDK** — 通过 NuGet 包引用
 
 ## 项目构建
