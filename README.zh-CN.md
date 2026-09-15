@@ -8,7 +8,7 @@
 ![.NET 8.0](https://img.shields.io/badge/.NET-8.0-blue)
 ![Windows x64](https://img.shields.io/badge/Windows-x64-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-173_✔️-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-174_✔️-brightgreen)
 
 ## 特性
 
@@ -16,7 +16,7 @@
 - **虚拟文件系统 (VFS)** — 运行时通过 Win32 文件 API Hook 透明重定向文件访问，无需解压到磁盘
 - **LZMA 压缩** — 使用 LZMA 算法压缩 VFS 数据，减小输出文件体积
 - **注册表虚拟化（实验性）** — 可选 Hook 注册表 API，隔离注册表读写
-- **子进程注入（实验性）** — 内置 APC / NtCreateThreadEx / CreateRemoteThread 三级注入管线；**当前版本停用**（新内核加固所致，见[已知限制](#已知限制)），子进程暂不继承 VFS 视图
+- **子进程 VFS 继承（实验性）** — 封包程序启动的非封包子进程会被自动注入 Loader，并通过 VfsLink 握手继承父程序的 VFS 视图；封包子进程则使用自己的 Loader（互不干扰）
 - **安全加固** — DLL 提取使用随机子目录隔离 + CRC32 完整性校验 + FILE_FLAG_WRITE_THROUGH 独占写入
 - **CLI + GUI 双模式** — 支持图形界面和命令行两种操作方式
 - **国际化** — 支持中文 (zh-CN) 和英文 (en-US) 界面
@@ -93,7 +93,7 @@ EniBox/
 │       ├── include/         # 头文件定义
 │       └── deps/MinHook/    # vendored MinHook (API Hook 框架，含 HDE 反汇编器)
 └── tests/
-    ├── EniBox.Tests/        # xUnit 测试项目 (173 用例)
+    ├── EniBox.Tests/        # xUnit 测试项目 (174 用例)
     │   ├── E2E/             # 端到端测试 (封包+运行+VFS+注册表+子进程)
     │   ├── PackService/     # 封包服务验证 (Mock+异常+输入)
     │   ├── Unit/            # 模型/VFS/压缩/互操作 单元测试
@@ -123,7 +123,7 @@ EniBox/
 1. **Loader 初始化** — 入口点 bootstrap 旁置加载 Loader DLL，解析 .enibox 节区的 VFS 数据（CRC32 校验）
 2. **安装 Hook** — Hook Win32 文件 API（CreateFileA/W、ReadFile、GetFileSize、SetFilePointer、GetFileAttributes 等）
 3. **透明重定向** — 目标程序的文件访问被 VFS Hook 拦截，匹配到 VFS 条目则返回内存数据，否则透传真实文件系统
-4. **子进程注入（实验性）** — 注入管线已就绪但当前版本停用（见已知限制）
+4. **子进程 VFS 继承（实验性）** — 启动非封包子进程时注入 Loader 并通过 VfsLink 传递父 VFS；封包子进程与系统程序（cmd.exe 等）不在注入范围（见已知限制）
 
 ## 已知限制
 
@@ -131,17 +131,17 @@ EniBox/
 
 - **仅支持 x64** — 32 位 PE 会在封包阶段被明确拒绝
 - **VFS 只读** — 对 VFS 内文件的写入会被拒绝；若目标程序运行时要写"自身目录"（配置/日志），请通过参数将其重定向到可写目录
-- **子进程不继承 VFS** — 进程链 Hook 因新内核加固（Win11 24H2+ 等）存在兼容缺口，注入管线在当前版本停用
+- **子进程继承的边界** — 系统程序（cmd.exe、conhost.exe 及 System32 下的程序）不注入、不继承 VFS；注入的子进程持有父 VFS 的只读副本（父进程退出后仍可用）；"子进程再孙进程"的多级继承暂不支持
 - **注册表虚拟化未经端到端验证** — 功能代码与开关存在，但缺乏封包后的自动化测试
 - **兼容性验证范围有限** — 目前主要在 Windows 11 (26200, Insider) x64 上完成回归；Windows 10 为目标平台但覆盖有限
 
-## 测试覆盖 (173 用例)
+## 测试覆盖 (174 用例)
 
 | 类别 | 数量 | 覆盖内容 |
 |------|:----:|---------|
 | 单元测试 | ~80 | VFS 结构体序列化、CRC32、模型/配置/错误码、存根机器码 |
 | 集成测试 | ~30 | VFS 构建、LZMA 压缩往返、PeTool P/Invoke、CLI 参数 |
-| E2E 测试 | 24 | 封包流程、运行时运行、VFS 文件读取、Loader 提取、特殊路径 |
+| E2E 测试 | 25 | 封包流程、运行时运行、VFS 文件读取、Loader 提取、特殊路径 |
 | 边界测试 | 8 | PE 畸形输入（截断/损坏/空/随机/SizeOfOptionalHeader=0）|
 | 代码审查 | ~20 | 源文件存在性、函数签名、架构检测逻辑 |
 

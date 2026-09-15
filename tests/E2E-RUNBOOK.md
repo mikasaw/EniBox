@@ -152,7 +152,7 @@ Test 9: Sub-Process Injection       → test_SubProcessInjectionStrategy (P0-03,
 1. vendored MinHook 整体替换为上游 TsudaKageyu/MinHook（buffer.c/trampoline.c/HDE）；
 2. `SelectLoaderDll` 改为磁盘优先（`Resources\EniBox.Loader.<arch>.dll` → `EniBox.Loader.<arch>.dll` → `EniBox.Loader.dll`），嵌入资源仅作回退，且无论来源都做 MZ/PE 机器类型校验，并在 CLI 进度输出中打印 SHA256 指纹前 16 位——来源与版本从此可观察。
 
-**D3 专项现状（不再阻塞）**: Nt 层（NtCreateFile 等 syscall stub）与进程创建链（CreateProcessW 等）的 inline hook 保持停用——Win11 25H2+ 的 syscall stub 含每次启动随机的完整性指令（如 `test byte [0x48FE0308], imm8`），复制进 trampoline 必崩。Win32 层 hook（CreateFileA/W、ReadFile、GetFileSize、SetFilePointer、GetFileAttributes 等）已覆盖常规 Win32 应用与 .NET 应用的全部 E2E 场景。子进程"注入策略"测试（VfsTest Test 9）只断言子进程可创建 + 父进程 hook 完好，不依赖被停用的进程 hook，因此照常通过。
+**D3 专项现状（2026-09-15 探针重测后已恢复启用）**: 探针实证上游 MinHook 在 Win11 26200 上处理 Nt 层（NtCreateFile/NtOpenFile/NtReadFile）与进程链（CreateProcessW/A）的 trampoline 完全可用——旧"必崩"结论是陈旧嵌入 Loader 字节造成的误诊。三项探针：① Nt 层启用后 VfsTest 9/9，透传/CRC 读取全部穿过 detour；② 进程链启用后 9/9；③ 非跳过名单子进程 W/A 两族注入成功（cdb 子进程调试确认 Loader 落在子进程）。现已在 hook_manager.c 恢复启用，并实现子进程 VFS 继承：父注入前写 VfsLink 握手文件（`%TEMP%\EniBox-<pid>-<rnd>\EniBox.VfsLink`，含父镜像路径），注入的 Loader 在子进程 DllMain 中映射父镜像、拷贝 .enibox 内 VFS blob 到私有内存并初始化；封包子进程（含 .enibox 节）跳过注入以防同名模块遮蔽。E2E `E2E_PackedSubProcHost_ChildInheritsParentVfs` 覆盖全链路。注意 ShouldInjectProcess 跳过名单（cmd.exe/conhost/System32 等）内的子进程不注入、不继承 VFS。
 
 **2026-09-15 已修复的根因链（历史存档）**:
 1. `PE_ModMergeImports` 三态逻辑全部损坏：常规 MSVC 镜像导入表无冗余空间 → 静默跳过仍返回成功（Loader 从未进导入表）；空表路径越界必返回 SECTION_FULL。

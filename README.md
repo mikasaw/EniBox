@@ -10,7 +10,7 @@ virtual file system (VFS).
 ![.NET 8.0](https://img.shields.io/badge/.NET-8.0-blue)
 ![Windows x64](https://img.shields.io/badge/Windows-x64-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Tests](https://img.shields.io/badge/Tests-173_✔️-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-174_✔️-brightgreen)
 
 ## Features
 
@@ -18,7 +18,7 @@ virtual file system (VFS).
 - **Virtual file system (VFS)** — redirects file access at runtime via Win32 file API hooks; no extraction to disk needed
 - **LZMA compression** — VFS data is LZMA-compressed to reduce output size
 - **Registry virtualization (experimental)** — optional registry API hooking to isolate registry access
-- **Sub-process injection (experimental)** — a three-stage injection pipeline (APC / NtCreateThreadEx / CreateRemoteThread) is built in; it is **disabled in the current release** due to newer-kernel hardening, so child processes do **not** inherit the VFS view (see [Known Limitations](#known-limitations))
+- **Child VFS inheritance (experimental)** — non-packed children spawned by a packed program are automatically injected with the loader and inherit the parent's VFS view via a VfsLink handshake; packed children use their own loader (no interference)
 - **Hardened extraction** — the loader DLL is extracted into a randomized per-PID directory with CRC32 integrity verification and exclusive WRITE_THROUGH writes
 - **CLI + GUI** — both a graphical interface and a command-line interface
 - **Localization** — Chinese (zh-CN) and English (en-US) UI
@@ -95,7 +95,7 @@ EniBox/
 │       ├── include/         # Headers
 │       └── deps/MinHook/    # vendored MinHook (API hooking, includes the HDE disassembler)
 └── tests/
-    ├── EniBox.Tests/        # xUnit test project (173 tests)
+    ├── EniBox.Tests/        # xUnit test project (174 tests)
     │   ├── E2E/             # End-to-end tests (pack + run + VFS + registry + subprocess)
     │   ├── PackService/     # Pack service tests (mock + exception + input)
     │   ├── Unit/            # Model/VFS/compression/interop unit tests
@@ -125,7 +125,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) (Chinese) for the detailed design.
 1. **Loader initialization** — the entry-point bootstrap side-loads the loader DLL, which parses the VFS blob from the `.enibox` section (CRC32 verified)
 2. **Hook installation** — Win32 file APIs are hooked (CreateFileA/W, ReadFile, GetFileSize, SetFilePointer, GetFileAttributes, etc.)
 3. **Transparent redirection** — file access from the packed program is intercepted; VFS matches are served from memory, everything else passes through to the real file system
-4. **Sub-process injection (experimental)** — the pipeline is in place but disabled in the current release (see Known Limitations)
+4. **Child VFS inheritance (experimental)** — non-packed children are injected with the loader and receive the parent's VFS via VfsLink; packed children and system programs (cmd.exe etc.) are not injected (see Known Limitations)
 
 ## Known Limitations
 
@@ -133,17 +133,17 @@ Please read this before using the tool in anger:
 
 - **x64 only** — 32-bit PEs are explicitly rejected at pack time
 - **The VFS is read-only** — writes to VFS files are denied; if the packed program writes config/logs into "its own directory" at runtime, redirect them to a writable location via arguments
-- **Child processes do not inherit the VFS** — the process-chain hooks have a compatibility gap with newer hardened kernels (Win11 24H2+ and later), so injection is disabled in the current release
+- **Child inheritance boundaries** — system programs (cmd.exe, conhost.exe, anything under System32) are not injected and do not inherit the VFS; an injected child holds a read-only copy of the parent's VFS (it remains usable after the parent exits); grandchild inheritance is not supported yet
 - **Registry virtualization is not end-to-end tested** — the code and the switch exist, but no packed-runtime automated tests cover it yet
 - **Limited compatibility validation** — regression currently targets Windows 11 (26200, Insider) x64; Windows 10 is a supported target but has limited coverage
 
-## Test Coverage (173 tests)
+## Test Coverage (174 tests)
 
 | Category | Count | Scope |
 |----------|:-----:|-------|
 | Unit tests | ~80 | VFS struct serialization, CRC32, models/config/error codes, stub machine code |
 | Integration tests | ~30 | VFS build, LZMA round-trip, PeTool P/Invoke, CLI arguments |
-| E2E tests | 24 | Pack pipeline, packed runtime, VFS file reads, loader extraction, special paths |
+| E2E tests | 25 | Pack pipeline, packed runtime, VFS file reads, loader extraction, special paths |
 | Boundary tests | 8 | Malformed PE inputs (truncated/corrupt/empty/random/SizeOfOptionalHeader=0) |
 | Code review tests | ~20 | Source file presence, function signatures, architecture detection logic |
 
