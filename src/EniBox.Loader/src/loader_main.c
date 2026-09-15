@@ -2,6 +2,7 @@
 #include "vfs_runtime.h"
 #include "hook_manager.h"
 #include "hook_process.h"
+#include "vfs_link.h"
 #include <windows.h>
 #include <strsafe.h>
 #include <stdio.h>
@@ -182,6 +183,8 @@ int32_t Loader_Initialize(uint8_t* vfs_base, uint32_t vfs_size) {    if (g_initi
     g_vfs_base = vfs_base;
     g_vfs_size = vfs_size;
     g_initialized = TRUE;
+    /* Only from this point may child processes be handed the VFS */
+    HookProcess_SetVfsReady(TRUE);
     return 0;
 }
 
@@ -193,6 +196,92 @@ void Loader_Finalize(void) {
     g_initialized = FALSE;
     g_vfs_base = NULL;
     g_vfs_size = 0;
+}
+
+/* ---- VFS inheritance (running inside an injected, non-packed child) ----
+ *
+ * The injecting parent writes a VfsLink handoff file next to the extracted
+ * Loader DLL; it names the parent image whose .enibox section carries the
+ * VFS. We map that image read-only and copy the VFS blob into private
+ * memory (VFS_Initialize zeroes the checksum field in place, so the blob
+ * must be writable). From here on this process serves the parent's VFS
+ * through its own hooks. */
+static void Loader_TryInheritParentVfs(HMODULE hModule) {
+    wchar_t self[MAX_PATH];
+    if (!GetModuleFileNameW(hModule, self, MAX_PATH)) return;
+    wchar_t* slash = wcsrchr(self, L'\\');
+    if (!slash) return;
+    *slash = L'\0';
+    wchar_t linkPath[MAX_PATH];
+    if (swprintf_s(linkPath, MAX_PATH, L"%s\\%s", self, ENIBOX_VFSLINK_NAME) < 0) return;
+
+    HANDLE h = CreateFileW(linkPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE) return;
+    uint32_t magic = 0, pathChars = 0;
+    DWORD read = 0;
+    wchar_t image[MAX_PATH];
+    BOOL ok = ReadFile(h, &magic, sizeof(magic), &read, NULL) && read == sizeof(magic)
+              && magic == ENIBOX_VFSLINK_MAGIC;
+    if (ok) ok = ReadFile(h, &pathChars, sizeof(pathChars), &read, NULL) && read == sizeof(pathChars);
+    if (ok && pathChars > 0 && pathChars < MAX_PATH) {
+        ok = ReadFile(h, image, pathChars * sizeof(wchar_t), &read, NULL)
+             && read == pathChars * sizeof(wchar_t);
+        if (ok) image[pathChars] = L'\0';
+    } else {
+        ok = FALSE;
+    }
+    CloseHandle(h);
+    if (!ok) return;
+
+    HANDLE hFile = CreateFileW(image, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                               NULL, OPEN_EXISTING, 0, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return;
+    LARGE_INTEGER fileSize;
+    if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart <= 0) { CloseHandle(hFile); return; }
+    HANDLE hMap = CreateFileMappingW(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    CloseHandle(hFile);
+    if (!hMap) return;
+    const uint8_t* base = (const uint8_t*)MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0);
+    if (!base) { CloseHandle(hMap); return; }
+
+    do {
+        const uint64_t size = (uint64_t)fileSize.QuadPart;
+        if (size < sizeof(IMAGE_DOS_HEADER)) break;
+        IMAGE_DOS_HEADER dos;
+        memcpy(&dos, base, sizeof(dos));
+        if (dos.e_magic != 0x5A4D) break;
+        if (dos.e_lfanew <= 0 || (uint64_t)dos.e_lfanew + sizeof(IMAGE_NT_HEADERS64) > size) break;
+        IMAGE_NT_HEADERS64 nt;
+        memcpy(&nt, base + dos.e_lfanew, sizeof(nt));
+        if (nt.Signature != 0x00004550 || nt.FileHeader.Machine != 0x8664) break;
+        if (nt.FileHeader.NumberOfSections == 0 || nt.FileHeader.NumberOfSections > 96) break;
+        const uint8_t* sectab = base + dos.e_lfanew + sizeof(DWORD) +
+            sizeof(IMAGE_FILE_HEADER) + nt.FileHeader.SizeOfOptionalHeader;
+        if ((uint64_t)(sectab - base) + (uint64_t)nt.FileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER) > size)
+            break;
+        const IMAGE_SECTION_HEADER* eni = NULL;
+        IMAGE_SECTION_HEADER eniHeader;
+        for (uint16_t i = 0; i < nt.FileHeader.NumberOfSections; i++) {
+            IMAGE_SECTION_HEADER sec;
+            memcpy(&sec, sectab + (size_t)i * sizeof(IMAGE_SECTION_HEADER), sizeof(sec));
+            if (memcmp(sec.Name, ".enibox", 8) == 0) { eniHeader = sec; eni = &eniHeader; break; }
+        }
+        if (!eni) break;
+        const uint32_t ptr = eni->PointerToRawData;
+        if (ptr == 0 || (uint64_t)ptr + 296 > size) break;
+        const uint32_t vfs_total = *(const uint32_t*)(base + ptr + 288);
+        if (vfs_total == 0 || vfs_total > 0x10000000u) break; /* 256MB sanity cap */
+        if ((uint64_t)ptr + 296 + vfs_total > size) break;
+        uint8_t* copy = (uint8_t*)VirtualAlloc(NULL, vfs_total, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (!copy) break;
+        memcpy(copy, base + ptr + 296, vfs_total);
+        if (Loader_Initialize(copy, vfs_total) != 0) {
+            VirtualFree(copy, 0, MEM_RELEASE);
+        }
+        OutputDebugStringW(L"[EniBox] child inherited parent VFS via VfsLink");
+    } while (0);
+    UnmapViewOfFile(base);
+    CloseHandle(hMap);
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -311,6 +400,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     }
                 }
             }
+        } else {
+            /* Injected into a non-packed child: inherit the parent's VFS
+             * via the VfsLink handoff (no .enibox section of our own). */
+            Loader_TryInheritParentVfs(hModule);
         }
         DisableThreadLibraryCalls(hModule);
         break;

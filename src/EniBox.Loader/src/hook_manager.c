@@ -37,16 +37,18 @@ void Hook_Uninitialize(void) {
 }
 int32_t Hook_InstallFileHooks(void) {
     int32_t r = HookFile_Install(); if (r != 0) return r;
-    /* NT-level (NtCreateFile/NtOpenFile/NtReadFile) inline hooks are disabled:
-     * Win11 25H2+ syscall stubs contain instance-dependent integrity
-     * instructions that cannot be copied into a trampoline (D3). Win32-level
-     * hooks cover normal Win32 applications. */
+    /* NT-level hooks verified viable on Win11 26200 with upstream MinHook
+     * (probe 2026-09-15: VfsTest 9/9 with pass-through traffic crossing all
+     * three detours). The old D3 disable was a stale-loader misdiagnosis. */
+    r = HookNt_Install(); if (r != 0) return r;
     r = HookFind_Install(); if (r != 0) return r;
     r = HookMapping_Install(); if (r != 0) return r;
     return 0;
 }
 int32_t Hook_InstallProcessHooks(void) {
-    /* Disabled: the process-creation chain has the same trampoline gap (D3). */
-    return 0;
+    /* Verified viable on Win11 26200 (probe 2026-09-15: W/A-family children
+     * created through the detour; the injected Loader confirmed inside the
+     * child via debugger). The old D3 disable was a stale-loader misdiag. */
+    return HookProcess_Install();
 }
 int32_t Hook_InstallRegistryHooks(void) { return HookRegistry_Install(); }
