@@ -460,15 +460,15 @@ int test_LoaderIntegrityCrc32(void)
         return 1;
     }
 
-    /* section 布局 (与 loader_main.c 一致):
-     *   x64: [stub:14][VA_placeholder:8][original_ep_rva:4][section_rva:4][vfs_total_size:4][VFS...][Loader...]
+    /* section 布局 (与 PackService.CombineSectionData / loader_main.c 一致):
+     *   x64: [bootstrap:288][vfs_total_size:4][loader_total_size:4][VFS...][Loader...]
      *   x86: [stub:6][VA_placeholder:4][original_ep_rva:4][section_rva:4][vfs_total_size:4][VFS...][Loader...]
      */
     BOOL is_64bit = (nt->FileHeader.Machine == 0x8664);
     uint32_t vfs_size_offset, vfs_data_offset;
     if (is_64bit) {
-        vfs_size_offset = 14u + 8u + 4u + 4u;        /* 30 */
-        vfs_data_offset = vfs_size_offset + 4u;       /* 34 */
+        vfs_size_offset = 288u;                       /* vfs_total_size */
+        vfs_data_offset = 296u;                       /* VFS blob (metadata + data) */
     } else {
         vfs_size_offset = 6u + 4u + 4u;               /* 14 */
         vfs_data_offset = vfs_size_offset + 4u;       /* 18 */
@@ -485,7 +485,18 @@ int test_LoaderIntegrityCrc32(void)
                    (unsigned long)loader_offset, (unsigned long)section_size);
         return 1;
     }
-    uint32_t loader_size = section_size - loader_offset;
+    /* x64 布局在 vfs_total_size 之后紧存 loader_total_size：SizeOfRawData 会被
+     * 文件对齐补零，用 section_size 反推 loader 大小会混入填充字节导致 CRC 不符。 */
+    uint32_t loader_size;
+    if (is_64bit)
+        loader_size = *(uint32_t*)(section_base + vfs_size_offset + 4);
+    else
+        loader_size = section_size - loader_offset;
+    if (loader_offset + loader_size > section_size) {
+        CHECK_FAIL("Embedded Loader DLL exceeds section bounds (loader_offset=%lu loader_size=%lu section_size=%lu)",
+                   (unsigned long)loader_offset, (unsigned long)loader_size, (unsigned long)section_size);
+        return 1;
+    }
     uint8_t* loader_data = section_base + loader_offset;
 
     if (loader_data[0] != 'M' || loader_data[1] != 'Z') {

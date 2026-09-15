@@ -222,8 +222,8 @@ public class PackedVfsRuntimeTests : E2ETestBase
         Assert.Contains("Test 9: Sub-Process Injection Strategy (P0-03)", runResult.StandardOutput);
         Assert.Contains("CHECK:PASS:test_SubProcessInjectionStrategy", runResult.StandardOutput);
 
-        // 确认没有任何 FAIL
-        Assert.DoesNotContain("CHECK:FAIL", runResult.StandardOutput);
+        // 确认没有任何 FAIL（用 "CHECK:FAIL:test" 前缀，避免误匹配汇总行 "CHECK:FAIL:0"）
+        Assert.DoesNotContain("CHECK:FAIL:test", runResult.StandardOutput);
 
         Assert.Equal(0, runResult.ExitCode);
         Logger.Success("✓ 封包 VfsTest 全部 9 个测试通过，VFS 运行时 + P0 安全加固功能完整");

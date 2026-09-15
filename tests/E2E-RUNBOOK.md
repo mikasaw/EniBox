@@ -144,13 +144,15 @@ Test 9: Sub-Process Injection       → test_SubProcessInjectionStrategy (P0-03,
 
 ## 5. 已知问题
 
-### 5.1 封包产物启动即崩溃（0xC0000409 / 0xC0000005）——已定位为 MinHook 兼容性（2026-09-15 更新）
+### 5.1 封包产物启动即崩溃（0xC0000409 / 0xC0000005）——已全部修复（2026-09-15 二次更新）
 
-**现象**: 封包产物启动即崩溃；cDB/分析定位为两类签名：0xC0000409（FAST_FAIL_GUARD_ICALL_CHECK_FAILURE 或 abort）与 0xC0000005。
+**现象**: 封包产物启动即崩溃；cdb 分析定位为两类签名：0xC0000409（FAST_FAIL_GUARD_ICALL_CHECK_FAILURE 或 abort）与 0xC0000005。
 
-**2026-09-15 修复后残留的唯一阻塞点（D3 专项）**: 打包管线已全面修复（见下），产物可以启动、Loader DLL 可以被 bootstrap 正常加载、VFS 区域解析通过（magic/版本/校验和全对），但 `Loader_Initialize → Hook_Install*/Hook_EnableAll` 阶段，MinHook（2019 年 vendored 版本）构建的 trampoline 在 Win11 26200 的系统 DLL（kernel32 等新指令编码）上执行即 AV（`jmp qword ptr [未提交页]`）。被 hook 的第一个 API 一被调用就崩。
+**2026-09-15 晚间结论**: 崩溃已完全修复，`E2E` 全量 24/24 绿、封包 VfsTest 9/9 子测试全过。当晚残留的"trampoline AV"最终定位为**陈旧嵌入资源**：GUI 程序集内嵌的 `EniBox.Loader.x64.dll` 是旧版自定义 MinHook 构建（MSBuild 在原生 DLL 变更后不保证重新嵌入），崩溃现场的 `ff 25 rel32` 6 字节 detour 正是旧版格式（上游 MinHook 的 x64 detour 是 14 字节 `ff 25 00000000 + abs64`）。修复手段：
+1. vendored MinHook 整体替换为上游 TsudaKageyu/MinHook（buffer.c/trampoline.c/HDE）；
+2. `SelectLoaderDll` 改为磁盘优先（`Resources\EniBox.Loader.<arch>.dll` → `EniBox.Loader.<arch>.dll` → `EniBox.Loader.dll`），嵌入资源仅作回退，且无论来源都做 MZ/PE 机器类型校验，并在 CLI 进度输出中打印 SHA256 指纹前 16 位——来源与版本从此可观察。
 
-**后续专项建议**: 升级 vendored MinHook 到最新上游（HDE64 反汇编表更新），或替换为支持 Win11 25H2+ 的 hook 库（如即将支持的 hot-patch 友好方案）。
+**D3 专项现状（不再阻塞）**: Nt 层（NtCreateFile 等 syscall stub）与进程创建链（CreateProcessW 等）的 inline hook 保持停用——Win11 25H2+ 的 syscall stub 含每次启动随机的完整性指令（如 `test byte [0x48FE0308], imm8`），复制进 trampoline 必崩。Win32 层 hook（CreateFileA/W、ReadFile、GetFileSize、SetFilePointer、GetFileAttributes 等）已覆盖常规 Win32 应用与 .NET 应用的全部 E2E 场景。子进程"注入策略"测试（VfsTest Test 9）只断言子进程可创建 + 父进程 hook 完好，不依赖被停用的进程 hook，因此照常通过。
 
 **2026-09-15 已修复的根因链（历史存档）**:
 1. `PE_ModMergeImports` 三态逻辑全部损坏：常规 MSVC 镜像导入表无冗余空间 → 静默跳过仍返回成功（Loader 从未进导入表）；空表路径越界必返回 SECTION_FULL。
@@ -159,14 +161,29 @@ Test 9: Sub-Process Injection       → test_SubProcessInjectionStrategy (P0-03,
 4. stub 覆盖了 vfsTotalSize 与 VFS 头（现由宿主预留 stub 洞，布局自描述：+280 ep、+284 secRVA、+288 vfsTotal、+292 loaderSize、+296 VFS）。
 5. `VfsBuilder` 存储的 VFS 校验和是对"大小字段全零"的头部计算的（现先回写真实大小再计算）。
 6. `PackService` 现在把 `EniBox.Loader.dll` 旁置到产物同目录（bootstrap 的 LoadLibraryA 需要）。
+7. `VfsBuilder` 头部 `DataOffset` 写死 0，而 blob 实际是 `[metadata][data]` 布局，Loader 按它解析数据区 → 文件内容被读成 VFS 元数据（现写 `metadataStream.Length`）。
+8. 盘根路径文件（如 `C:\file.txt`）的 `Path.GetDirectoryName` 返回 `C:\`（带尾反斜杠），与 `GetFullPath(dirNode)` 重建的 `C:` 不等 → `DirIndex=INVALID`，Loader 重建路径丢失盘符 → 查找全部脱靶（现 `TrimEnd('\\','/')` 归一）。
 
 ### 5.1.1（历史）fc.exe 在封包后 STATUS_STACK_BUFFER_OVERRUN (0xC0000409)
 
 **现象**: `E2E_PackedFcExe_ExitsNormally_NotHanging` 退出码 = 0xC0000409
 
-**原因**: 同上——Loader 的 hook 框架（MinHook + inline trampoline）兼容性限制（现归入 D3 专项）。
+**原因**: 同上——Loader 的 hook 框架兼容性问题（2026-09-15 随 §5.1 一并修复）。
 
 **验证**: 看 `Assert.False(runResult.TimedOut, ...)` 通过即可（"不挂起"是核心要求，"正常退出码"不是）。
+
+### 5.1.2 Windows Defender 隔离封包测试产物（环境风险，未修复——需管理员）
+
+**现象**: `dotnet test` 全量跑时，个别 E2E 测试偶发 `Win32Exception: 系统找不到指定的文件`（`Process.Start` 启动 `%TEMP%\EniBox-E2E-*\*.enibox` 时）。单测/过滤跑复现率低，全量并行跑更高。属随机抽风，非确定性。
+
+**根因**: 已取证 —— `Get-MpThreatDetection` 显示 Defender 实时防护把刚生成的封包测试产物当威胁隔离（检测对象 `C:\Users\www\AppData\Local\Temp\EniBox-E2E-*\vfstest.enibox` 等）。文件在 `File.Exists` 检查之后、`CreateProcess` 之前被删。封包产物带 RWX 节 + inline hook + 注入行为，天然高启发式评分。
+
+**处置（需管理员 PowerShell，非管理员会报"权限不足"）**:
+```powershell
+Add-MpPreference -ExclusionPath 'G:\AITest\enibox'
+Add-MpPreference -ExclusionPath "$env:TEMP\EniBox-E2E-*"
+```
+CI（GitHub Actions Windows runner）默认无实时防护隔离此类文件，不受影响。
 
 ### 5.2 Standalone VfsTest.exe 跑出大量 FAIL
 
