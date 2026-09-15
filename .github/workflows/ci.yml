@@ -70,9 +70,11 @@ jobs:
       - name: 构建测试辅助程序 (runner 上没有预编译 publish 产物)
         shell: pwsh
         run: |
-          dotnet publish tests/TestHelpers/FileChecker/FileChecker.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false --nologo -o tests/TestHelpers/FileChecker/publish
-          dotnet publish tests/TestHelpers/RegChecker/RegChecker.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false --nologo -o tests/TestHelpers/RegChecker/publish
-          dotnet publish tests/TestHelpers/SubProcChild/SubProcChild.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false --nologo -o tests/TestHelpers/SubProcChild/publish
+          # 必须单文件：封包把 exe 复制到临时目录独立运行，非单文件 apphost
+          # 会因找不到旁边的 dll 在 .NET 初始化即失败（exit 0x8001009A）
+          dotnet publish tests/TestHelpers/FileChecker/FileChecker.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true --nologo -o tests/TestHelpers/FileChecker/publish
+          dotnet publish tests/TestHelpers/RegChecker/RegChecker.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true --nologo -o tests/TestHelpers/RegChecker/publish
+          dotnet publish tests/TestHelpers/SubProcChild/SubProcChild.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true --nologo -o tests/TestHelpers/SubProcChild/publish
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
           $vs = & $vswhere -latest -property installationPath
           cmd /c "call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul 2>&1 && cd /d tests\TestHelpers\VfsTest && cl /nologo /W3 /O2 vfstest.c /Fe:VfsTest.exe advapi32.lib && if not exist publish mkdir publish && copy /y VfsTest.exe publish\"
