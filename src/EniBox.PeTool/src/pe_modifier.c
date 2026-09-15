@@ -120,7 +120,7 @@ int32_t PE_ModAddSection(PE_CONTEXT* ctx, const char* name,
      * section rva at +284 (see PackService.CombineSectionData). */
     if (strncmp(name, ".enibox", 7) == 0) {
         uint32_t stubOff = 208;
-        if (ctx->new_section_data && ctx->new_section_size >= stubOff + 24) {
+        if (ctx->new_section_data && ctx->new_section_size >= 288) {
             uint8_t* stub = ctx->new_section_data + stubOff;
             stub[0] = 0xFF;
             stub[1] = 0x25;
@@ -208,18 +208,23 @@ int32_t PE_ModMergeImports(PE_CONTEXT* ctx, const IMPORT_ENTRY* entries, uint32_
     if (eniboxRva == 0)
         return PE_ERR_SECTION_FULL;
 
-    /* Decode the section layout to locate the trailing import area */
-    uint32_t stub_total = ctx->is_64bit ? 30u : 14u;
-    if (ctx->new_section_size < stub_total + 8)
+    /* Decode the section layout to locate the trailing import area.
+     * New contract (PackService.CombineSectionData):
+     *   [0..287]     bootstrap + stub + VA + ep + section rva
+     *   [288..291]   vfs_total_size
+     *   [292..295]   loader_total_size
+     *   [296..]      VFS data + loader DLL bytes + (unused) import area */
+    uint32_t bootstrap_total = 288u; /* applies to both arch layouts' region */
+    if (ctx->new_section_size < bootstrap_total + 8)
         return PE_ERR_IMPORT_MERGE;
 
-    uint32_t vfs_total_size = *(uint32_t*)(ctx->new_section_data + stub_total);
-    uint32_t loader_total_size = *(uint32_t*)(ctx->new_section_data + stub_total + 4);
+    uint32_t vfs_total_size = *(uint32_t*)(ctx->new_section_data + bootstrap_total);
+    uint32_t loader_total_size = *(uint32_t*)(ctx->new_section_data + bootstrap_total + 4);
     /* Align the import area so the rebuilt descriptor table and its IAT
      * slots sit at naturally-aligned RVAs — the loader refuses to walk an
      * import directory whose RVA is misaligned. */
-    uint32_t importAreaOffset = AlignUp(stub_total + 8 + vfs_total_size + loader_total_size, 8);
-    if (importAreaOffset < stub_total + 8 || importAreaOffset >= ctx->new_section_size)
+    uint32_t importAreaOffset = AlignUp(bootstrap_total + 8 + vfs_total_size + loader_total_size, 8);
+    if (importAreaOffset < bootstrap_total + 8 || importAreaOffset >= ctx->new_section_size)
         return PE_ERR_IMPORT_MERGE; /* layout fields corrupted or no import area reserved */
 
     /* Count the descriptors in the original import table (bounds-checked) */
@@ -248,12 +253,21 @@ int32_t PE_ModMergeImports(PE_CONTEXT* ctx, const IMPORT_ENTRY* entries, uint32_
         ? &((IMAGE_NT_HEADERS64*)nt)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT]
         : &((IMAGE_NT_HEADERS32*)nt)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT];
     uint32_t descSize = (existingCount + count + 1) * (uint32_t)sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    /* Mirror the write loop below exactly, including the 8-byte ILT
+     * alignment padding, so the space check cannot under-count. */
     uint32_t tailSize = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        tailSize += (uint32_t)strlen(entries[i].dll_name) + 1; /* DLL name */
-        tailSize += thunkSize; /* ILT: single thunk entry + terminator slot */
-        tailSize += 2 + (uint32_t)strlen(ENIBOX_LOADER_FUNC) + 1; /* IMAGE_IMPORT_BY_NAME (hint + name) */
-        tailSize += thunkSize; /* FT slot: the loader writes the resolved address here */
+    {
+        uint32_t simOffset = descSize;
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t nameLen = (uint32_t)strlen(entries[i].dll_name) + 1;
+            uint32_t funcLen = (uint32_t)strlen(ENIBOX_LOADER_FUNC) + 1;
+            simOffset += nameLen;
+            simOffset += 2 + funcLen;            /* hint + function name */
+            simOffset = (simOffset + 7) & ~7u;   /* ILT 8-alignment padding */
+            simOffset += thunkSize;              /* ILT thunk */
+            simOffset += thunkSize;              /* FT slot */
+        }
+        tailSize = simOffset - descSize;
     }
     uint32_t totalNeeded = descSize + tailSize;
 

@@ -289,13 +289,13 @@ static int IsThunkTarget(void* pTarget, uintptr_t* origTargetOut) {
     return 0;
 }
 
-static int32_t delta_of(const void* orig, const void* copy) {
-    return (int32_t)((uintptr_t)copy - (uintptr_t)orig);
-}
-
 /* Fix up position-dependent instructions in the copied prologue: rel32
- * branches, rel8 short branches and rip-relative FF 15/FF 25 thunks. */
-static void RelocateCopiedCode(uint8_t* orig, uint8_t* copy, size_t len) {
+ * branches, rip-relative FF 15/FF 25 thunks and 0F 8x rel32 jcc. Short rel8
+ * branches whose target stays inside the copied block need no fixup (source
+ * and destination move together); branches leaving the block cannot be
+ * relocated within a 1-byte displacement and make the hook unsupported.
+ * Returns 1 on success, 0 when the prologue cannot be relocated safely. */
+static int RelocateCopiedCode(uint8_t* orig, uint8_t* copy, size_t len) {
     int64_t delta = (int64_t)((uintptr_t)copy - (uintptr_t)orig);
     size_t pos = 0;
     while (pos < len) {
@@ -304,16 +304,25 @@ static void RelocateCopiedCode(uint8_t* orig, uint8_t* copy, size_t len) {
         if (o[0] == 0xE9 || o[0] == 0xE8) {
             *(int32_t*)(c + 1) += (int32_t)delta;
             pos += 5;
-        } else if (o[0] == 0xEB || (o[0] & 0xF0) == 0x70) {
-            *(int8_t*)(c + 1) += (int8_t)delta;
-            pos += 2;
         } else if (o[0] == 0xFF && (o[1] == 0x15 || o[1] == 0x25)) {
             *(int32_t*)(c + 2) += (int32_t)delta;
             pos += 6;
+        } else if (o[0] == 0x0F && o[1] >= 0x80 && o[1] <= 0x8F) {
+            *(int32_t*)(c + 2) += (int32_t)delta;
+            pos += 6;
+        } else if (o[0] == 0xEB || (o[0] & 0xF0) == 0x70) {
+            /* Short branch: if the target lies outside the copied block the
+             * displacement cannot represent the move — bail out. */
+            int64_t target = (int64_t)((uintptr_t)(o + 2) + (int64_t)(int8_t)o[1]);
+            if (target < (int64_t)(uintptr_t)orig ||
+                target >= (int64_t)((uintptr_t)orig + len))
+                return 0;
+            pos += 2;
         } else {
             pos += GetInstructionLength(o);
         }
     }
+    return 1;
 }
 
 /* Allocate an executable block within +-1GB of pTarget so a rel32 jmp can
@@ -382,7 +391,10 @@ static MH_STATUS CreateTrampoline(HOOK_ENTRY* hook) {
     /* Copy original instructions to trampoline */
     memcpy(trampoline, hook->origBytes, hookSize);
     /* Position-dependent instructions must be fixed up for the new address */
-    RelocateCopiedCode(hook->target, (uint8_t*)trampoline, hookSize);
+    if (!RelocateCopiedCode(hook->target, (uint8_t*)trampoline, hookSize)) {
+        VirtualFree(trampoline, 0, MEM_RELEASE);
+        return MH_ERROR_UNSUPPORTED_FUNCTION;
+    }
 
     /* Append a jump back to the original function (after the stolen bytes) */
     uint8_t* jumpBack = (uint8_t*)trampoline + hookSize;
