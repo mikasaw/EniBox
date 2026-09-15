@@ -306,11 +306,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -NoTest
 
 ## 9. CI 集成 (GitHub Actions e2e-verify job)
 
-MIT-233 把 `verify-e2e.ps1` 接进 `.github/workflows/ci.yml`,作为第 4 个 job `e2e-verify`,与现有 `dotnet-build` / `msvc-build` / `dotnet-test` 协同。
+MIT-233 把 `verify-e2e.ps1` 接进 `.github/workflows/ci.yml`,作为第 4 个 job `e2e-verify`,与现有 `dotnet-build` / `msvc-build` / `dotnet-test` 协同。随后追加第 5 个 job `cli-mode-build`(CLI_MODE 变体的编译 + `--help` 冒烟——该变体曾因无人编译而烂掉)。
 
 ### 9.1 触发条件
 
-与现有 3 个 job 相同:
+与现有各 job 相同:
 
 - `push` 到 `main` / `develop`
 - `pull_request` 目标 `main`
@@ -321,9 +321,10 @@ MIT-233 把 `verify-e2e.ps1` 接进 `.github/workflows/ci.yml`,作为第 4 个 j
 dotnet-build ┐
              ├─→ e2e-verify
 msvc-build  ─┘
+         └──→ cli-mode-build
 ```
 
-`e2e-verify` 的 `needs: [dotnet-build, msvc-build]` 确保 native DLLs 已被编译。但本 job 内部仍重跑一次 native build,理由 1: GitHub Actions 各 job 工作目录独立,matrix 上游 job 的 `bin/` 产物不会自动传递;理由 2: 显式重 build 让 `e2e-verify` 自包含,便于重跑单个 job 排错。
+`e2e-verify` / `cli-mode-build` 的 `needs: [dotnet-build, msvc-build]` 确保 native DLLs 已被编译。但本 job 内部仍重跑一次 native build,理由 1: GitHub Actions 各 job 工作目录独立,matrix 上游 job 的 `bin/` 产物不会自动传递;理由 2: 显式重 build 让 job 自包含,便于重跑单个 job 排错。
 
 ### 9.3 步骤序列
 

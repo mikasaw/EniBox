@@ -64,3 +64,24 @@ jobs:
           name: verify-e2e-trx
           path: tests/EniBox.Tests/TestResults/verify-e2e-*.trx
           if-no-files-found: warn
+
+  cli-mode-build:
+    # CLI_MODE 变体（EniBox.CLI，无 WPF/WinForms 依赖）曾因没人编译而烂掉
+    # （Program.cs 的 #if !CLI_MODE 守卫缺失导致双 Main）。这个 job 保证它
+    # 永远在 CI 里被编译 + 冒烟。
+    needs: [dotnet-build, msvc-build]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.x'
+      - uses: microsoft/setup-msbuild@v2
+      - name: 编译 native DLLs (PeTool + Loader)
+        run: |
+          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true
+      - name: 编译 CLI_MODE 变体 (EniBox.CLI)
+        run: dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release -p:CLI_MODE=true --nologo -v:minimal
+      - name: CLI 冒烟 (--help)
+        run: src/EniBox.GUI/bin/Release/net8.0-windows/win-x64/EniBox.CLI.exe --help
