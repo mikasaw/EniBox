@@ -248,4 +248,57 @@ public class PackedVfsRuntimeTests : E2ETestBase
         Assert.Contains("*****", runResult.StandardOutput);
         Logger.Success("✓ 封包 fc.exe 真跑通：实际完成两文件比较并报告差异（exit=1）");
     }
+
+    /// <summary>
+    /// 验证: 子进程继承父 VFS — 封包 SubProcHost（携带 VFS-only 文件），由它启动
+    /// 未封包的 SubProcChild。父的 Loader 注入子进程后经 VfsLink 握手继承父 VFS，
+    /// 子进程读取仅存在于父 VFS 中的文件并回显内容。
+    /// </summary>
+[SkippableFact]
+    public async Task E2E_PackedSubProcHost_ChildInheritsParentVfs()
+    {
+        RequirePeTool();
+        RequireHelper("SubProcHost");
+        RequireHelper("SubProcChild");
+
+        var hostPath = TestExeBuilder.GetHelperPath("SubProcHost");
+        var childPath = TestExeBuilder.GetHelperPath("SubProcChild");
+        var outputDir = TempFiles.CreateTempDirectory();
+        var outputPath = Path.Combine(outputDir, "subproc.enibox");
+
+        var vfsContent = "Hello from parent VFS to the child process!";
+        var srcFile = TempFiles.CreateTempFile(vfsContent, ".txt");
+        var vfsPath = @"C:\EniBox_child_vfs_e2e.txt";
+
+        var config = new PackConfiguration
+        {
+            SourceExePath = hostPath,
+            OutputPath = outputPath,
+            EnableSubProcessInjection = true,
+            EnableRegistryVirtualization = false
+        };
+        config.Files.Add(new PackFileItem
+        {
+            SourcePath = srcFile,
+            VirtualPath = vfsPath,
+            IsCompressed = false,
+            OriginalSize = new FileInfo(srcFile).Length
+        });
+
+        var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
+
+        var runResult = ProcessRunner.Run(outputPath, $"\"{childPath}\" \"{vfsPath}\"", 20000);
+
+        Logger.Info($"退出码: {runResult.ExitCode}");
+        Logger.Info($"输出:\n{runResult.StandardOutput}");
+
+        Assert.False(runResult.TimedOut, "不应超时");
+        // host 会用 CreateProcessA 与 CreateProcessW 各启动一次子进程，
+        // 覆盖两条注入路径；每次都应 SUBPROC_CREATE:OK + CHILD_VFS:OK
+        Assert.Equal(2, runResult.StandardOutput.Split("CHECK:SUBPROC_CREATE:OK").Length - 1);
+        Assert.Equal(2, runResult.StandardOutput.Split("CHECK:CHILD_VFS:OK").Length - 1);
+        Assert.Contains(vfsContent, runResult.StandardOutput);
+        Logger.Success("✓ 子进程经 VfsLink 继承父 VFS（A/W 两族注入路径均读到 VFS-only 文件）");
+    }
 }

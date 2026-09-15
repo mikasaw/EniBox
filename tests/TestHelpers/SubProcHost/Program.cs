@@ -16,6 +16,8 @@ class Program
         var startInfo = new ProcessStartInfo
         {
             FileName = childPath,
+            // 透传剩余参数给子进程（例如 SubProcChild 要读的 VFS 路径）
+            Arguments = args.Length >= 2 ? args[1] : string.Empty,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
