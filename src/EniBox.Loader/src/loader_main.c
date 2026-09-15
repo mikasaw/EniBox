@@ -372,7 +372,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 metadata_offset = 6;
             }
             vfs_data_offset = metadata_offset + 16; /* ep(4) + sec(4) + vfs(4) + loader(4) */
-            if (is_64bit) vfs_data_offset = 296;    /* bootstrap(512) + vfs_total(4) + loader_total(4) */
+            if (is_64bit) vfs_data_offset = 296;    /* bootstrap(288) + vfs_total(4) + loader_total(4) */
 
             /* Read config flags (written by PackService at [272..275]) */
             if (section_size >= 276) {

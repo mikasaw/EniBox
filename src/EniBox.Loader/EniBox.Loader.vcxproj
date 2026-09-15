@@ -166,6 +166,12 @@
     <ClInclude Include="include\lzma_dec.h" />
     <ClInclude Include="include\crc32.h" />
     <ClInclude Include="deps\MinHook\include\MinHook.h" />
+    <ClInclude Include="deps\MinHook\src\buffer.h" />
+    <ClInclude Include="deps\MinHook\src\trampoline.h" />
+    <ClInclude Include="deps\MinHook\src\HDE\hde64.h" />
+    <ClInclude Include="deps\MinHook\src\HDE\table64.h" />
+    <ClInclude Include="deps\MinHook\src\HDE\pstdint.h" />
+    <ClInclude Include="include\vfs_link.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

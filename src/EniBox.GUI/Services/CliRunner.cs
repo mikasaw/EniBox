@@ -48,7 +48,7 @@ namespace EniBox.GUI.Services
 
                 if (!TryParseOnOff(compressRaw, out var compress))
                 {
-                    Console.Error.WriteLine($"Error: --compress 的值无效: '{compressRaw}'（支持 on|off|true|false）");
+                    Console.Error.WriteLine($"Error: --compress 的值无效: '{compressRaw}'（支持 on|off|true|false|yes|no|1|0）");
                     context.ExitCode = 1;
                     return;
                 }

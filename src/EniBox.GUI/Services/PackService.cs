@@ -293,7 +293,7 @@ namespace EniBox.GUI.Services
                 var data = File.ReadAllBytes(path);
                 return HasLoaderPeHeader(data, machine) ? data : null;
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 return null;
             }
