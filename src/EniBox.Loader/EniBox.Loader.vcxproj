@@ -141,6 +141,9 @@
     <ClCompile Include="src\lzma_dec.c" />
     <ClCompile Include="src\crc32.c" />
     <ClCompile Include="deps\MinHook\src\hook.c" />
+    <ClCompile Include="deps\MinHook\src\buffer.c" />
+    <ClCompile Include="deps\MinHook\src\trampoline.c" />
+    <ClCompile Include="deps\MinHook\src\HDE\hde64.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\loader_main.h" />
