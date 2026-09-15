@@ -33,6 +33,42 @@ EniBox.exe --cli --source <源EXE路径> --output <输出路径> [选项]
 |------|------|
 | `--help` / `-h` / `-?` | 显示帮助信息 |
 
+## 参数行为细节
+
+### `--files` / `--dirs`
+
+- 多个路径用分号 `;` 分隔；**不存在的路径会报错并以退出码 1 终止**（不会静默跳过产生残缺包）。
+- 依赖文件的虚拟路径 = 相对于源 EXE 所在目录的相对路径（绝对路径源则保留绝对路径）。
+- CLI 暂不支持自定义虚拟路径映射；需要任意映射请使用编程 API
+  （`PackFileItem.VirtualPath`）或 GUI。
+
+### `--compress`
+
+- 接受 `on|off|true|false`（大小写不敏感，亦接受 `yes|no|1|0`），默认 `on`。
+- 注意：小数据可能压缩后反而更大，打包器会自动回退为原样存储
+  （值数据不变，仅标志位不同）。
+
+### `--registry-virtualization`
+
+- 预置值目前仅支持**编程 API**（`PackConfiguration.RegistryValues`，
+  见 `PackRegistryValue.FromString/FromDword`）；CLI 只打开/关闭开关。
+- 语义：预置键在封包程序内可读；对虚拟句柄的写入仅进程内隔离，
+  不持久化、不污染真实注册表；未预置的键完全透传。
+
+### 退出码契约
+
+| 退出码 | 含义 |
+|--------|------|
+| `0` | 封包成功 |
+| `1` | 参数/用法错误或封包失败（stderr 给出原因） |
+| `2` | 用户取消（Ctrl+C） |
+
+### Loader 来源与指纹
+
+封包时按 `Resources\EniBox.Loader.<arch>.dll` → 同目录 → 通用名顺序
+优先取磁盘 Loader，回退嵌入资源；进度输出会打印所用 Loader 的
+SHA256 前 16 位与来源路径，便于核对版本。
+
 ## 使用示例
 
 ### 基本封包
