@@ -213,6 +213,22 @@ CI（GitHub Actions Windows runner）默认无实时防护隔离此类文件，�
   （疑同类加载竞争），重启用 Nt/进程链 hook 无并发失稳证据。
 - 加管理员排除项（§5.1.2 命令）后此类失败应清零。
 
+### 5.1.5 W 族注入在 CI runner 上未生效（开放问题，2026-09-16）
+
+CI（windows-latest / Server 2022 / v143 构建）run 35015669441：`E2E_PackedSubProcHost_ChildInheritsParentVfs`
+中 A 族子进程继承成功，**W 族子进程 CHILD_VFS:FAIL (error=2)**——子进程正常跑但无 VFS hook
+（TRX 实证，见 verify-e2e-trx artifact）。本地 26200 双族 100% 通过。
+
+两个嫌疑方向（下一轮带证据排查）：
+1. `Inject_DetectBestMethod` 在 Server 2022 选了 APC 方法，user APC 对挂起初始线程的
+   交付时机在 .NET apphost 上不可靠 → 可试强制 CreateRemoteThread 或注入后轮询
+   LoadLibrary 结果；
+2. kernelbase!CreateProcessW 在 Server 2022 的内部调用路径绕过 W 导出序言
+   （A 内部转 W 若走内部实现而非导出，W detour 对 A 发起的调用不触发——但本例
+   W 是 host 直接调用的）。
+
+临时缓解：该测试在 CI 失败不影响其余 26 项；修复前可视为 W 族继承待验证。
+
 ### 5.2 Standalone VfsTest.exe 跑出大量 FAIL
 
 **现象**: 直接运行 `publish\VfsTest.exe`（未封包）输出 `CHECK:FAIL:test_VfsFileRead` 等。
