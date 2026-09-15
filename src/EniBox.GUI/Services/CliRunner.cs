@@ -52,8 +52,10 @@ namespace EniBox.GUI.Services
                     EnableSubProcessInjection = subProc
                 };
 
-                // Add files
+                // Add files — 不存在的路径是使用错误，必须报错退出而非静默跳过
+                //（静默跳过会产出一个"内容比预期少"的包且退出码为 0）
                 var baseDir = Path.GetDirectoryName(source) ?? "";
+                var missingPaths = new List<string>();
                 foreach (var file in files.Split(';', StringSplitOptions.RemoveEmptyEntries))
                 {
                     if (File.Exists(file))
@@ -61,6 +63,10 @@ namespace EniBox.GUI.Services
                         var item = PackFileItem.FromFile(file, baseDir);
                         item.IsCompressed = compress;
                         config.Files.Add(item);
+                    }
+                    else
+                    {
+                        missingPaths.Add(file);
                     }
                 }
 
@@ -76,6 +82,17 @@ namespace EniBox.GUI.Services
                             config.Files.Add(item);
                         }
                     }
+                    else
+                    {
+                        missingPaths.Add(dir);
+                    }
+                }
+
+                if (missingPaths.Count > 0)
+                {
+                    Console.Error.WriteLine($"Error: --files/--dirs 指定的路径不存在: {string.Join("; ", missingPaths)}");
+                    context.ExitCode = 1;
+                    return;
                 }
 
                 var packService = (IPackService)_serviceProvider.GetService(typeof(IPackService))!;
