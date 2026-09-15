@@ -197,7 +197,7 @@ CI（GitHub Actions Windows runner）默认无实时防护隔离此类文件，�
 注意事项：
 - `Git\cmd\git.exe` 是安装根自定位的包装器，封包后移出安装目录会报
   "Top-level not found"——这是包装器自身的预期行为，请封包
-  `mingw64in\git.exe`（连同其 DLL 依赖）并保持便携布局。
+  `mingw64\bin\git.exe`（连同其 DLL 依赖）并保持便携布局。
 - 更多应用（写配置类、插件目录类）待补。
 
 ### 5.1.4 并行全量 0xC0000005 取证结论（2026-09-16，T-C 时间盒）

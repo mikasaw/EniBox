@@ -43,6 +43,11 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.x'
+      - uses: microsoft/setup-msbuild@v2
+      - name: 编译 native DLLs (GUI csproj 的 Content 依赖)
+        run: |
+          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
       # csproj 固定 RuntimeIdentifier=win-x64，restore 必须带 -r 下载 runtime pack
       - run: dotnet restore -r win-x64
       - run: |

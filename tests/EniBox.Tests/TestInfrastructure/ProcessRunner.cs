@@ -56,6 +56,13 @@ public sealed class ProcessRunner
             try { process.Kill(); } catch { }
             process.WaitForExit(5000);
         }
+        else
+        {
+            // 正常退出时也要排空异步输出：WaitForExit(int) 重载不等
+            // OutputDataReceived 异步泵排空，CI 慢 VM 上会拿到空 stdout
+            // （.NET 文档明确要求超时重载后再调无参 WaitForExit）。
+            process.WaitForExit();
+        }
         
         result.ExitCode = process.ExitCode;
         result.StandardOutput = string.Join(Environment.NewLine, outputLines);
