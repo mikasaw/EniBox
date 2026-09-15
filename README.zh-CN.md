@@ -4,7 +4,7 @@
 
 **虚拟文件盒封包工具** — 将 Windows EXE 及其依赖文件打包为单文件可执行程序，运行时通过虚拟文件系统 (VFS) 透明访问。
 
-[![CI](https://github.com/YOUR_GITHUB_USERNAME/EniBox/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_GITHUB_USERNAME/EniBox/actions/workflows/ci.yml)
+[![CI](https://github.com/mikasaw/EniBox/actions/workflows/ci.yml/badge.svg)](https://github.com/mikasaw/EniBox/actions/workflows/ci.yml)
 ![.NET 8.0](https://img.shields.io/badge/.NET-8.0-blue)
 ![Windows x64](https://img.shields.io/badge/Windows-x64-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
