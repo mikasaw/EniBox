@@ -63,8 +63,8 @@ static size_t DecodeModRM(const uint8_t* pModRM, uint8_t opcode) {
     else if (mod == 2) size += 4; /* disp32 */
 
     /* Immediate operand size based on opcode group */
-    if (opcode == 0x81 || opcode == 0xC1 || opcode == 0xC7) size += 4; /* imm32 */
-    else if (opcode == 0x80 || opcode == 0x83 || opcode == 0xC0 || opcode == 0xC6) size += 1; /* imm8 */
+    if (opcode == 0x81 || opcode == 0xC1 || opcode == 0xC7 || opcode == 0xF7) size += 4; /* imm32 */
+    else if (opcode == 0x80 || opcode == 0x83 || opcode == 0xC0 || opcode == 0xC6 || opcode == 0xF6) size += 1; /* imm8 */
 
     return size;
 }
@@ -152,11 +152,18 @@ static size_t GetInstructionLength(void* pCode) {
     case 0xC6: case 0xC7:
     /* fpu modrm */
     case 0xD8: case 0xD9: case 0xDA: case 0xDB: case 0xDC: case 0xDD: case 0xDE: case 0xDF:
+    /* test grp (F6 imm8 / F7 imm32) — Win11 24H2+ syscall stub integrity check */
+    case 0xF6: case 0xF7:
         return offset + 1 + DecodeModRM(p + offset + 1, opcode);
 
     /* 0F two-byte opcode prefix */
     case 0x0F: {
         uint8_t opcode2 = p[offset + 1];
+        /* no-ModRM two-byte ops: syscall(05) sysret(07) rdtsc(31)
+         * sysenter(34) sysexit(35) — Win11 25H2+ syscall stubs contain
+         * syscall + these must not fall into the ModRM default */
+        if (opcode2 == 0x05 || opcode2 == 0x07 || opcode2 == 0x31 ||
+            opcode2 == 0x34 || opcode2 == 0x35) return offset + 2;
         /* jcc rel32 (0F 80-8F) */
         if (opcode2 >= 0x80 && opcode2 <= 0x8F) return offset + 6;
         /* near jmp (0F FF), near call (0F FE) - ModRM */
