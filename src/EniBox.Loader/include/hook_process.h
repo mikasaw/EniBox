@@ -1,4 +1,4 @@
-﻿#ifndef HOOK_PROCESS_H
+#ifndef HOOK_PROCESS_H
 #define HOOK_PROCESS_H
 #include <windows.h>
 #include <stdint.h>
@@ -16,5 +16,8 @@ void HookProcess_SetLoaderPath(const wchar_t* path);
 /* Mark this process's VFS as initialized - only then may child processes
  * be handed the VFS via the VfsLink file (called by loader_main). */
 void HookProcess_SetVfsReady(BOOL ready);
+
+/* Carry the packed config flags into the VfsLink handoff (loader_main). */
+void HookProcess_SetConfigFlags(uint32_t flags);
 
 #endif

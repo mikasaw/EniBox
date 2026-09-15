@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Process Creation Hooks - CreateProcessA/W
  *
  * These hooks intercept child process creation to inject the Loader DLL
@@ -52,6 +52,11 @@ void HookProcess_SetLoaderPath(const wchar_t* path) {
 static BOOL g_vfs_ready = FALSE;
 
 void HookProcess_SetVfsReady(BOOL ready) { g_vfs_ready = ready; }
+
+/* Packed config flags, propagated to injected children via VfsLink. */
+static uint32_t g_config_flags = 0;
+
+void HookProcess_SetConfigFlags(uint32_t flags) { g_config_flags = flags; }
 
 /* ---- Child image inspection + VfsLink handoff ---- */
 
@@ -187,6 +192,8 @@ static BOOL WriteVfsLinkFile(void) {
     if (ok) ok = WriteFile(h, &imageChars, sizeof(imageChars), &written, NULL) && written == sizeof(imageChars);
     if (ok) ok = WriteFile(h, image, imageChars * sizeof(wchar_t), &written, NULL)
                        && written == imageChars * sizeof(wchar_t);
+    if (ok) ok = WriteFile(h, &g_config_flags, sizeof(g_config_flags), &written, NULL)
+                       && written == sizeof(g_config_flags);
     CloseHandle(h);
     return ok;
 }

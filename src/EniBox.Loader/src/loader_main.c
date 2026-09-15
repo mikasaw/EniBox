@@ -1,4 +1,4 @@
-﻿#include "loader_main.h"
+#include "loader_main.h"
 #include "vfs_runtime.h"
 #include "hook_manager.h"
 #include "hook_process.h"
@@ -10,6 +10,9 @@
 static uint8_t* g_vfs_base = NULL;
 static uint32_t g_vfs_size = 0;
 static BOOL g_initialized = FALSE;
+/* Packed config flags (bootstrap [272..275]); default = all enabled for
+ * contexts without a packed section (e.g. standalone LoadLibrary). */
+static uint32_t g_config_flags = 0xFFFFFFFFu;
 static uint32_t g_original_entry_rva = 0;
 static wchar_t g_loader_path[MAX_PATH] = {0};
 static wchar_t g_extracted_loader_path[MAX_PATH] = {0};
@@ -176,8 +179,10 @@ int32_t Loader_Initialize(uint8_t* vfs_base, uint32_t vfs_size) {    if (g_initi
     if (result != 0) { VFS_Finalize(); return result; }
     result = Hook_InstallFileHooks();
     if (result != 0) { Hook_Uninitialize(); VFS_Finalize(); return result; }
-    Hook_InstallProcessHooks();
-    Hook_InstallRegistryHooks();
+    if (g_config_flags & ENIBOX_FLAG_SUBPROCESS_INJECTION)
+        Hook_InstallProcessHooks();
+    if (g_config_flags & ENIBOX_FLAG_REGISTRY_VIRTUALIZATION)
+        HookRegistry_Install();
     result = Hook_EnableAll();
     if (result != 0) { Hook_Uninitialize(); VFS_Finalize(); return result; }
     g_vfs_base = vfs_base;
@@ -217,7 +222,7 @@ static void Loader_TryInheritParentVfs(HMODULE hModule) {
 
     HANDLE h = CreateFileW(linkPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
-    uint32_t magic = 0, pathChars = 0;
+    uint32_t magic = 0, pathChars = 0, linkFlags = 0xFFFFFFFFu;
     DWORD read = 0;
     wchar_t image[MAX_PATH];
     BOOL ok = ReadFile(h, &magic, sizeof(magic), &read, NULL) && read == sizeof(magic)
@@ -229,6 +234,12 @@ static void Loader_TryInheritParentVfs(HMODULE hModule) {
         if (ok) image[pathChars] = L'\0';
     } else {
         ok = FALSE;
+    }
+    if (ok) {
+        /* VfsLink v2 尾部携带父进程配置位；旧格式无此字段时保持默认全开 */
+        ReadFile(h, &linkFlags, sizeof(linkFlags), &read, NULL);
+        g_config_flags = linkFlags;
+        HookProcess_SetConfigFlags(g_config_flags);
     }
     CloseHandle(h);
     if (!ok) return;
@@ -350,6 +361,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             }
             vfs_data_offset = metadata_offset + 16; /* ep(4) + sec(4) + vfs(4) + loader(4) */
             if (is_64bit) vfs_data_offset = 296;    /* bootstrap(512) + vfs_total(4) + loader_total(4) */
+
+            /* Read config flags (written by PackService at [272..275]) */
+            if (section_size >= 276) {
+                g_config_flags = *(uint32_t*)(section_base + 272);
+                HookProcess_SetConfigFlags(g_config_flags);
+            }
 
             /* Read metadata */
             if (section_size >= vfs_data_offset) {

@@ -67,7 +67,11 @@ namespace EniBox.GUI.Services
                 if (peInfo.Architecture != PeArchitecture.X64)
                     return new PackResult { IsSuccess = false, ErrorMessage = MessageConstants.UnsupportedArch + peInfo.Architecture + MessageConstants.ArchSupportSuffix, ErrorCode = PackErrorCode.UnsupportedArch };
 
-                var sectionData = CombineSectionData(vfsResult, loaderData);
+                uint configFlags = 0;
+                if (config.EnableSubProcessInjection) configFlags |= PackConstants.ConfigFlagSubprocessInjection;
+                if (config.EnableRegistryVirtualization) configFlags |= PackConstants.ConfigFlagRegistryVirtualization;
+
+                var sectionData = CombineSectionData(vfsResult, loaderData, configFlags);
 
                 var peError = ApplyPeModifications(config.SourceExePath, config.OutputPath, sectionData);
                 if (peError != null)
@@ -349,16 +353,22 @@ namespace EniBox.GUI.Services
 
     private const int BootstrapRegionSize = 288; // VFS metadata starts here
 
-    private static byte[] CombineSectionData(VfsBuildResult vfsResult, byte[] loaderData)
+    private static byte[] CombineSectionData(VfsBuildResult vfsResult, byte[] loaderData, uint configFlags)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms);
 
         // [0..295] bootstrap region: code at [0..207], the jmp stub, the VA
         // placeholder and ep/section RVAs are filled in by PeTool afterwards.
+        // [272..275] carries the config flags (see PackConstants.ConfigFlagsOffset).
         var bootstrap = new byte[BootstrapRegionSize];
         Array.Copy(BootstrapCode, bootstrap, BootstrapCode.Length);
         writer.Write(bootstrap);
+        writer.BaseStream.Position = PackConstants.ConfigFlagsOffset;
+        writer.Write(configFlags);
+        // 写完 flags 后必须把流位置拨回引导区末尾（288），否则后续
+        // vfs_total/loader_total 会从 276 开始写、整个节布局错位
+        writer.BaseStream.Position = BootstrapRegionSize;
 
         var vfsMetadata = vfsResult.Metadata;
         var vfsDataRegion = vfsResult.DataRegion;

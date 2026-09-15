@@ -301,4 +301,57 @@ public class PackedVfsRuntimeTests : E2ETestBase
         Assert.Contains(vfsContent, runResult.StandardOutput);
         Logger.Success("✓ 子进程经 VfsLink 继承父 VFS（A/W 两族注入路径均读到 VFS-only 文件）");
     }
+
+    /// <summary>
+    /// 验证: EnableSubProcessInjection=false 时子进程不注入、不继承 VFS。
+    /// 配置位经 .enibox 引导区 [272..275] 传递给 Loader，关掉后打包程序
+    /// 启动的子进程走真实文件系统（读 VFS-only 路径应 GLE=2）。
+    /// </summary>
+[SkippableFact]
+    public async Task E2E_PackedSubProcHost_InjectionDisabled_ChildDoesNotInheritVfs()
+    {
+        RequirePeTool();
+        RequireHelper("SubProcHost");
+        RequireHelper("SubProcChild");
+
+        var hostPath = TestExeBuilder.GetHelperPath("SubProcHost");
+        var childPath = TestExeBuilder.GetHelperPath("SubProcChild");
+        var outputDir = TempFiles.CreateTempDirectory();
+        var outputPath = Path.Combine(outputDir, "subproc_noinject.enibox");
+
+        var vfsContent = "This must NOT reach the child when injection is off.";
+        var srcFile = TempFiles.CreateTempFile(vfsContent, ".txt");
+        var vfsPath = @"C:\EniBox_child_vfs_off.txt";
+
+        var config = new PackConfiguration
+        {
+            SourceExePath = hostPath,
+            OutputPath = outputPath,
+            EnableSubProcessInjection = false,   // 开关关闭
+            EnableRegistryVirtualization = false
+        };
+        config.Files.Add(new PackFileItem
+        {
+            SourcePath = srcFile,
+            VirtualPath = vfsPath,
+            IsCompressed = false,
+            OriginalSize = new FileInfo(srcFile).Length
+        });
+
+        var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
+
+        var runResult = ProcessRunner.Run(outputPath, $"\"{childPath}\" \"{vfsPath}\"", 20000);
+
+        Logger.Info($"退出码: {runResult.ExitCode}");
+        Logger.Info($"输出:\n{runResult.StandardOutput}");
+
+        Assert.False(runResult.TimedOut, "不应超时");
+        // 两个子进程（A/W 族）都被创建，但都不该读到 VFS 内容
+        Assert.Equal(2, runResult.StandardOutput.Split("CHECK:SUBPROC_CREATE:OK").Length - 1);
+        Assert.DoesNotContain("CHECK:CHILD_VFS:OK", runResult.StandardOutput);
+        Assert.Equal(2, runResult.StandardOutput.Split("CHECK:CHILD_VFS:FAIL").Length - 1);
+        Assert.DoesNotContain(vfsContent, runResult.StandardOutput);
+        Logger.Success("✓ 子进程注入关闭：子进程未继承 VFS（走真实文件系统）");
+    }
 }
