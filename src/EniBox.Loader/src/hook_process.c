@@ -237,8 +237,16 @@ static BOOL WINAPI Hook_CreateProcessW(
 
     if (result && lpProcessInformation) {
         /* The VfsLink must exist before the injected Loader's DllMain runs */
-        if (WriteVfsLinkFile()) {
-            Inject_LoadDll(lpProcessInformation->hProcess, g_loader_path);
+        BOOL linkOk = WriteVfsLinkFile();
+        int32_t injectResult = -1;
+        if (linkOk) {
+            injectResult = Inject_LoadDll(lpProcessInformation->hProcess, g_loader_path);
+        }
+        {
+            char d[128];
+            sprintf_s(d, sizeof(d), "[EniBox] inject W pid=%lu link=%d inj=%d",
+                      lpProcessInformation->dwProcessId, linkOk ? 1 : 0, injectResult);
+            OutputDebugStringA(d);
         }
         ResumeThread(lpProcessInformation->hThread);
     }
@@ -298,8 +306,16 @@ static BOOL WINAPI Hook_CreateProcessA(
 
     if (result && lpProcessInformation) {
         /* The VfsLink must exist before the injected Loader's DllMain runs */
-        if (WriteVfsLinkFile()) {
-            Inject_LoadDll(lpProcessInformation->hProcess, g_loader_path);
+        BOOL linkOk = WriteVfsLinkFile();
+        int32_t injectResult = -1;
+        if (linkOk) {
+            injectResult = Inject_LoadDll(lpProcessInformation->hProcess, g_loader_path);
+        }
+        {
+            char d[128];
+            sprintf_s(d, sizeof(d), "[EniBox] inject A pid=%lu link=%d inj=%d",
+                      lpProcessInformation->dwProcessId, linkOk ? 1 : 0, injectResult);
+            OutputDebugStringA(d);
         }
         ResumeThread(lpProcessInformation->hThread);
     }

@@ -223,17 +223,25 @@ void Loader_Finalize(void) {
  * memory (VFS_Initialize zeroes the checksum field in place, so the blob
  * must be writable). From here on this process serves the parent's VFS
  * through its own hooks. */
+
+/* 永久诊断点：OutputDebugString 在生产环境静默，接调试器/DebugView 可见 */
+static void VfsInherit_Diag(const char* step) {
+    char d[96];
+    sprintf_s(d, sizeof(d), "[EniBox] inherit %s", step);
+    OutputDebugStringA(d);
+}
+
 static void Loader_TryInheritParentVfs(HMODULE hModule) {
     wchar_t self[MAX_PATH];
-    if (!GetModuleFileNameW(hModule, self, MAX_PATH)) return;
+    if (!GetModuleFileNameW(hModule, self, MAX_PATH)) { VfsInherit_Diag("selfpath_failed"); return; }
     wchar_t* slash = wcsrchr(self, L'\\');
-    if (!slash) return;
+    if (!slash) { VfsInherit_Diag("selfpath_no_slash"); return; }
     *slash = L'\0';
     wchar_t linkPath[MAX_PATH];
-    if (swprintf_s(linkPath, MAX_PATH, L"%s\\%s", self, ENIBOX_VFSLINK_NAME) < 0) return;
+    if (swprintf_s(linkPath, MAX_PATH, L"%s\\%s", self, ENIBOX_VFSLINK_NAME) < 0) { VfsInherit_Diag("linkpath_fmt_failed"); return; }
 
     HANDLE h = CreateFileW(linkPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
+    if (h == INVALID_HANDLE_VALUE) { VfsInherit_Diag("link_open_failed"); return; }
     uint32_t magic = 0, pathChars = 0, linkFlags = 0xFFFFFFFFu;
     DWORD read = 0;
     wchar_t image[MAX_PATH];
@@ -254,18 +262,18 @@ static void Loader_TryInheritParentVfs(HMODULE hModule) {
         HookProcess_SetConfigFlags(g_config_flags);
     }
     CloseHandle(h);
-    if (!ok) return;
+    if (!ok) { VfsInherit_Diag("link_read_failed"); return; }
 
     HANDLE hFile = CreateFileW(image, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
                                NULL, OPEN_EXISTING, 0, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) return;
+    if (hFile == INVALID_HANDLE_VALUE) { VfsInherit_Diag("parent_image_open_failed"); return; }
     LARGE_INTEGER fileSize;
-    if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart <= 0) { CloseHandle(hFile); return; }
+    if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart <= 0) { CloseHandle(hFile); VfsInherit_Diag("parent_image_size_failed"); return; }
     HANDLE hMap = CreateFileMappingW(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
     CloseHandle(hFile);
-    if (!hMap) return;
+    if (!hMap) { VfsInherit_Diag("map_failed"); return; }
     const uint8_t* base = (const uint8_t*)MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0);
-    if (!base) { CloseHandle(hMap); return; }
+    if (!base) { CloseHandle(hMap); VfsInherit_Diag("mapview_failed"); return; }
 
     do {
         const uint64_t size = (uint64_t)fileSize.QuadPart;
@@ -300,6 +308,9 @@ static void Loader_TryInheritParentVfs(HMODULE hModule) {
         memcpy(copy, base + ptr + 296, vfs_total);
         if (Loader_Initialize(copy, vfs_total) != 0) {
             VirtualFree(copy, 0, MEM_RELEASE);
+            VfsInherit_Diag("preload_init_failed");
+        } else {
+            VfsInherit_Diag("ok");
         }
         OutputDebugStringW(L"[EniBox] child inherited parent VFS via VfsLink");
     } while (0);
