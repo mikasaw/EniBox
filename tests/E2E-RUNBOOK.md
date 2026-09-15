@@ -200,6 +200,19 @@ CI（GitHub Actions Windows runner）默认无实时防护隔离此类文件，�
   `mingw64in\git.exe`（连同其 DLL 依赖）并保持便携布局。
 - 更多应用（写配置类、插件目录类）待补。
 
+### 5.1.4 并行全量 0xC0000005 取证结论（2026-09-16，T-C 时间盒）
+
+曾观察到并行全量下封包产物退出码 0xC0000005 一次。配置 WER LocalDumps
+（HKCU 免管理员）后连跑三轮全量取证：
+
+- 三轮共 3-5 个失败**全部为启动期 Win32Exception（文件在
+  File.Exists 与 CreateProcess 之间被删）**，Get-MpThreatDetection
+  时间戳与失败逐次吻合（Defender 实时隔离），无一次运行期崩溃、
+  无新 dump 产生。
+- 结论：当前失败集 100% 为 §5.1.2 环境问题；0xC0000005 为孤例
+  （疑同类加载竞争），重启用 Nt/进程链 hook 无并发失稳证据。
+- 加管理员排除项（§5.1.2 命令）后此类失败应清零。
+
 ### 5.2 Standalone VfsTest.exe 跑出大量 FAIL
 
 **现象**: 直接运行 `publish\VfsTest.exe`（未封包）输出 `CHECK:FAIL:test_VfsFileRead` 等。
