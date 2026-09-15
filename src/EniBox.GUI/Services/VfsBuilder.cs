@@ -220,7 +220,12 @@ namespace EniBox.GUI.Services
                     entryDataOffset = (uint)(dataStream.Position - storeSize);
                 }
 
-                var fileDir = Path.GetDirectoryName(file.VirtualPath) ?? "";
+                // Path.GetDirectoryName yields "C:\" for drive roots but the
+                // node-based GetFullPath below reconstructs "C:" — strip trailing
+                // separators so root-level files still link to their drive node
+                // (otherwise the C runtime rebuilds their path without the drive
+                // prefix and every lookup misses).
+                var fileDir = (Path.GetDirectoryName(file.VirtualPath) ?? "").TrimEnd('\\', '/');
                 // VFS_INVALID_INDEX: the C runtime (vfs_hashtable.c) treats this
                 // sentinel as "no parent directory". Defaulting to 0 would make
                 // it chase directory #0 (which may not exist) and the hash table
@@ -291,7 +296,10 @@ namespace EniBox.GUI.Services
 
                 header.MetadataOffset = (uint)headerPos;
                 header.MetadataSize = (uint)metadataStream.Length;
-                header.DataOffset = 0;
+                // The serialized blob is [metadata][data]; the Loader resolves
+                // file data as blob_base + data_offset + entry.DataOffset, and
+                // entry offsets are relative to the data stream's own start.
+                header.DataOffset = (uint)metadataStream.Length;
                 header.DataSize = (uint)dataStream.Length;
 
                 // Rewrite the header so metadataBytes carries the real offset/
