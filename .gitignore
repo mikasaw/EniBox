@@ -93,3 +93,9 @@ tests/TestHelpers/*/publish/
 
 ## Arts
 .arts/
+
+## 诊断与临时脚手架
+.diag/
+
+## 导入库与链接产物(误跟踪清理 2026-09-15)
+*.exp
