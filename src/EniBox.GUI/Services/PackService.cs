@@ -60,7 +60,7 @@ namespace EniBox.GUI.Services
 
                 ReportProgress(progressCallback, PackStage.ModifyingPE, 0, config.Files.Count, "Modifying PE structure...");
 
-                var loaderData = SelectLoaderDll(peInfo.Architecture);
+                var loaderData = SelectLoaderDll(peInfo.Architecture, progressCallback);
                 if (loaderData == null)
                     return new PackResult { IsSuccess = false, ErrorMessage = MessageConstants.UnsupportedArch + peInfo.Architecture + MessageConstants.ArchSupportSuffix, ErrorCode = PackErrorCode.UnsupportedArch };
 
@@ -221,17 +221,43 @@ namespace EniBox.GUI.Services
             }
         }
 
-        private static byte[]? SelectLoaderDll(PeArchitecture architecture)
+        private static byte[]? SelectLoaderDll(PeArchitecture architecture, IProgress<PackProgress>? progress)
         {
-            string resourceName = architecture switch
+            ushort machine = architecture switch
             {
-                PeArchitecture.X86 => PackConstants.LoaderDllX86Resource,
-                PeArchitecture.X64 => PackConstants.LoaderDllX64Resource,
-                _ => null!
+                PeArchitecture.X64 => 0x8664,
+                PeArchitecture.X86 => 0x014C,
+                _ => 0
+            };
+            if (machine == 0)
+                return null;
+
+            string suffix = architecture == PeArchitecture.X64 ? "x64" : "x86";
+
+            // Disk-first: a Loader DLL shipped next to the packer wins over the
+            // embedded resource. MSBuild does not always re-embed when the native
+            // DLL changes, so embedded bytes can go stale silently — the on-disk
+            // DLL is observable and its fingerprint is reported below.
+            var candidates = new[]
+            {
+                Path.Combine(AppContext.BaseDirectory, "Resources", $"EniBox.Loader.{suffix}.dll"),
+                Path.Combine(AppContext.BaseDirectory, $"EniBox.Loader.{suffix}.dll"),
+                Path.Combine(AppContext.BaseDirectory, PackConstants.LoaderDllImportName),
             };
 
-            if (resourceName == null)
-                return null;
+            foreach (var candidate in candidates)
+            {
+                var disk = TryReadLoaderDll(candidate, machine);
+                if (disk != null)
+                {
+                    ReportLoaderSource(progress, $"disk: {candidate}", disk);
+                    return disk;
+                }
+            }
+
+            string resourceName = architecture == PeArchitecture.X64
+                ? PackConstants.LoaderDllX64Resource
+                : PackConstants.LoaderDllX86Resource;
 
             var assembly = Assembly.GetExecutingAssembly();
             using var stream = assembly.GetManifestResourceStream(resourceName);
@@ -240,7 +266,51 @@ namespace EniBox.GUI.Services
 
             var data = new byte[stream.Length];
             stream.ReadExactly(data, 0, data.Length);
+            if (!HasLoaderPeHeader(data, machine))
+                return null; // corrupt or wrong-arch embed — refuse to pack it
+
+            ReportLoaderSource(progress, "embedded resource", data);
             return data;
+        }
+
+        private static byte[]? TryReadLoaderDll(string path, ushort machine)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                    return null;
+                var data = File.ReadAllBytes(path);
+                return HasLoaderPeHeader(data, machine) ? data : null;
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        // Validates the DOS header, PE signature and COFF machine type — a
+        // corrupt or wrong-architecture DLL must never reach the packed section.
+        private static bool HasLoaderPeHeader(byte[] data, ushort machine)
+        {
+            if (data.Length < 0x200 || data.Length > 64 * 1024 * 1024)
+                return false;
+            if (data[0] != (byte)'M' || data[1] != (byte)'Z')
+                return false;
+            int peOffset = BitConverter.ToInt32(data, 0x3C);
+            if (peOffset < 0 || peOffset + 6 > data.Length)
+                return false;
+            if (data[peOffset] != (byte)'P' || data[peOffset + 1] != (byte)'E'
+                || data[peOffset + 2] != 0 || data[peOffset + 3] != 0)
+                return false;
+            return BitConverter.ToUInt16(data, peOffset + 4) == machine;
+        }
+
+        private static void ReportLoaderSource(IProgress<PackProgress>? progress, string source, byte[] data)
+        {
+            string fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(data))[..16];
+            string message = $"Loader DLL [{fingerprint}...] ({data.Length} bytes) from {source}";
+            Debug.WriteLine(message);
+            ReportProgress(progress, PackStage.ModifyingPE, 0, 0, message);
         }
 
     /// <summary>
