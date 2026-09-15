@@ -24,7 +24,9 @@ namespace EniBox.GUI.Services
             var outputOption = new Option<string>("--output", "Path for the output file") { IsRequired = true };
             var filesOption = new Option<string>("--files", "Semicolon-separated list of dependency files");
             var dirsOption = new Option<string>("--dirs", "Semicolon-separated list of dependency directories");
-            var compressOption = new Option<bool>("--compress", () => true, "Enable compression (on/off)");
+            // System.CommandLine beta4 的 Option<bool> 只认 true/false——帮助文档
+            // 承诺的 on|off 会在解析阶段直接报错退出。用字符串接住再自行归一。
+            var compressOption = new Option<string>("--compress", () => "on", "Enable compression: on|off (default on)");
             var regVirtOption = new Option<bool>("--registry-virtualization", () => false, "Enable registry virtualization");
             var subProcOption = new Option<bool>("--subprocess-injection", () => true, "Enable subprocess injection");
 
@@ -40,9 +42,16 @@ namespace EniBox.GUI.Services
                 var output = context.ParseResult.GetValueForOption(outputOption)!;
                 var files = context.ParseResult.GetValueForOption(filesOption) ?? "";
                 var dirs = context.ParseResult.GetValueForOption(dirsOption) ?? "";
-                var compress = context.ParseResult.GetValueForOption(compressOption);
+                var compressRaw = context.ParseResult.GetValueForOption(compressOption) ?? "on";
                 var regVirt = context.ParseResult.GetValueForOption(regVirtOption);
                 var subProc = context.ParseResult.GetValueForOption(subProcOption);
+
+                if (!TryParseOnOff(compressRaw, out var compress))
+                {
+                    Console.Error.WriteLine($"Error: --compress 的值无效: '{compressRaw}'（支持 on|off|true|false）");
+                    context.ExitCode = 1;
+                    return;
+                }
 
                 var config = new PackConfiguration
                 {
@@ -134,6 +143,28 @@ namespace EniBox.GUI.Services
             });
 
             return rootCommand.Invoke(args);
+        }
+
+        private static bool TryParseOnOff(string raw, out bool value)
+        {
+            switch (raw.Trim().ToLowerInvariant())
+            {
+                case "on":
+                case "true":
+                case "yes":
+                case "1":
+                    value = true;
+                    return true;
+                case "off":
+                case "false":
+                case "no":
+                case "0":
+                    value = false;
+                    return true;
+                default:
+                    value = false;
+                    return false;
+            }
         }
     }
 }
