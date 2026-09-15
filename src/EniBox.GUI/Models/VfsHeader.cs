@@ -8,7 +8,7 @@ namespace EniBox.GUI.Models
     public struct VfsHeader
     {
         public const uint MAGIC = 0x42494E45; // 'ENIB'
-        public const uint CURRENT_VERSION = 1;
+        public const uint CURRENT_VERSION = 2;
 
         public uint Magic;
         public uint Version;
@@ -21,6 +21,9 @@ namespace EniBox.GUI.Models
         public uint LoaderOffset;
         public uint LoaderSize;
         public uint Checksum;
+        // v2：注册表虚拟化预置值区（blob 内偏移与大小；0/0 = 无注册表区）
+        public uint RegistryOffset;
+        public uint RegistrySize;
 
         public void WriteTo(BinaryWriter writer)
         {
@@ -35,6 +38,8 @@ namespace EniBox.GUI.Models
             writer.Write(LoaderOffset);
             writer.Write(LoaderSize);
             writer.Write(Checksum);
+            writer.Write(RegistryOffset);
+            writer.Write(RegistrySize);
         }
 
         public static VfsHeader ReadFrom(BinaryReader reader)
@@ -51,7 +56,9 @@ namespace EniBox.GUI.Models
                 DataSize = reader.ReadUInt32(),
                 LoaderOffset = reader.ReadUInt32(),
                 LoaderSize = reader.ReadUInt32(),
-                Checksum = reader.ReadUInt32()
+                Checksum = reader.ReadUInt32(),
+                RegistryOffset = reader.ReadUInt32(),
+                RegistrySize = reader.ReadUInt32()
             };
             return header;
         }

@@ -354,4 +354,44 @@ public class PackedVfsRuntimeTests : E2ETestBase
         Assert.DoesNotContain(vfsContent, runResult.StandardOutput);
         Logger.Success("✓ 子进程注入关闭：子进程未继承 VFS（走真实文件系统）");
     }
+
+    /// <summary>
+    /// 验证: 注册表虚拟化（实验性）— 封包 RegChecker 时预置
+    /// HKCU\Software\EniBoxTest\TestValue（该键真实注册表中不存在），
+    /// 封包程序内读取应命中虚拟注册表；真实注册表读取不受影响。
+    /// </summary>
+[SkippableFact]
+    public async Task E2E_PackedRegChecker_VirtualRegistryPreset()
+    {
+        RequirePeTool();
+        RequireHelper("RegChecker");
+
+        var regCheckerPath = TestExeBuilder.GetHelperPath("RegChecker");
+        var outputDir = TempFiles.CreateTempDirectory();
+        var outputPath = Path.Combine(outputDir, "regchecker.enibox");
+
+        var presetValue = "preset-registry-20260915";
+        var config = new PackConfiguration
+        {
+            SourceExePath = regCheckerPath,
+            OutputPath = outputPath,
+            EnableSubProcessInjection = true,
+            EnableRegistryVirtualization = true
+        };
+        config.RegistryValues.Add(PackRegistryValue.FromString(
+            @"HKEY_CURRENT_USER\Software\EniBoxTest", "TestValue", presetValue));
+
+        var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
+
+        var runResult = ProcessRunner.Run(outputPath, "", 15000);
+        Logger.Info($"退出码: {runResult.ExitCode}");
+        Logger.Info($"输出:\n{runResult.StandardOutput}");
+
+        Assert.False(runResult.TimedOut, "不应超时");
+        Assert.Contains("CHECK:REG_VIRTUAL:OK", runResult.StandardOutput);
+        Assert.Contains(presetValue, runResult.StandardOutput);
+        Assert.Contains("CHECK:REG_REAL:OK", runResult.StandardOutput);
+        Logger.Success("✓ 注册表虚拟化：预置值在封包程序内可读，真实注册表不受影响");
+    }
 }

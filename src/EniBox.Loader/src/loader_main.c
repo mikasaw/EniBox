@@ -2,6 +2,7 @@
 #include "vfs_runtime.h"
 #include "hook_manager.h"
 #include "hook_process.h"
+#include "hook_registry.h"
 #include "vfs_link.h"
 #include <windows.h>
 #include <strsafe.h>
@@ -175,6 +176,17 @@ __declspec(dllexport) int32_t __stdcall EniBoxLoader_GetVersion(void)
 int32_t Loader_Initialize(uint8_t* vfs_base, uint32_t vfs_size) {    if (g_initialized) return 0;
     int32_t result = VFS_Initialize(vfs_base, vfs_size);
     if (result != 0) return result;
+    /* v2 header: 预载注册表虚拟化预置值（仅启用注册表虚拟化时） */
+    if ((g_config_flags & ENIBOX_FLAG_REGISTRY_VIRTUALIZATION) && vfs_size >= 52) {
+        uint32_t version = *(uint32_t*)(vfs_base + 4);
+        if (version >= 2) {
+            uint32_t regOff = *(uint32_t*)(vfs_base + 44);
+            uint32_t regSize = *(uint32_t*)(vfs_base + 48);
+            if (regOff < vfs_size && regSize > 0 && regOff <= vfs_size - regSize) {
+                VReg_Preload(vfs_base + regOff, regSize);
+            }
+        }
+    }
     result = Hook_Initialize();
     if (result != 0) { VFS_Finalize(); return result; }
     result = Hook_InstallFileHooks();

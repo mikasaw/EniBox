@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Registry Virtualization Hooks
  *
  * Hooks RegOpenKeyExA/W, RegQueryValueExA/W, RegCloseKey, RegEnumValueA/W,
@@ -46,13 +46,20 @@ static BOOL         g_vreg_initialized = FALSE;
 
 /* ---- Helper: Build full key path from HKEY root + subkey ---- */
 
+/* 预定义根键按低 32 位比较：应用可能传零扩展（如 .NET IntPtr）或符号扩展
+ * （SDK 常量 (LONG)0x80000001→ULONG_PTR）两种形态，精确指针比较会失配。 */
+static uint32_t RegHandleId(HKEY hKey) {
+    return (uint32_t)(uintptr_t)hKey;
+}
+
 static void BuildKeyPathA(char* buf, uint32_t size, HKEY hKey, const char* subKey) {
     const char* root = NULL;
-    if (hKey == HKEY_LOCAL_MACHINE)    root = "HKEY_LOCAL_MACHINE";
-    else if (hKey == HKEY_CURRENT_USER) root = "HKEY_CURRENT_USER";
-    else if (hKey == HKEY_CLASSES_ROOT) root = "HKEY_CLASSES_ROOT";
-    else if (hKey == HKEY_USERS)       root = "HKEY_USERS";
-    else if (hKey == HKEY_CURRENT_CONFIG) root = "HKEY_CURRENT_CONFIG";
+    uint32_t hk = RegHandleId(hKey);
+    if (hk == 0x80000002)      root = "HKEY_LOCAL_MACHINE";
+    else if (hk == 0x80000001) root = "HKEY_CURRENT_USER";
+    else if (hk == 0x80000000) root = "HKEY_CLASSES_ROOT";
+    else if (hk == 0x80000003) root = "HKEY_USERS";
+    else if (hk == 0x80000005) root = "HKEY_CURRENT_CONFIG";
 
     if (root && subKey)
         sprintf_s(buf, size, "%s\\%s", root, subKey);
@@ -70,11 +77,12 @@ static void BuildKeyPathA(char* buf, uint32_t size, HKEY hKey, const char* subKe
 
 static void BuildKeyPathW(wchar_t* buf, uint32_t size, HKEY hKey, const wchar_t* subKey) {
     const wchar_t* root = NULL;
-    if (hKey == HKEY_LOCAL_MACHINE)    root = L"HKEY_LOCAL_MACHINE";
-    else if (hKey == HKEY_CURRENT_USER) root = L"HKEY_CURRENT_USER";
-    else if (hKey == HKEY_CLASSES_ROOT) root = L"HKEY_CLASSES_ROOT";
-    else if (hKey == HKEY_USERS)       root = L"HKEY_USERS";
-    else if (hKey == HKEY_CURRENT_CONFIG) root = L"HKEY_CURRENT_CONFIG";
+    uint32_t hk = RegHandleId(hKey);
+    if (hk == 0x80000002)      root = L"HKEY_LOCAL_MACHINE";
+    else if (hk == 0x80000001) root = L"HKEY_CURRENT_USER";
+    else if (hk == 0x80000000) root = L"HKEY_CLASSES_ROOT";
+    else if (hk == 0x80000003) root = L"HKEY_USERS";
+    else if (hk == 0x80000005) root = L"HKEY_CURRENT_CONFIG";
 
     if (root && subKey)
         swprintf_s(buf, size, L"%s\\%s", root, subKey);
@@ -181,6 +189,116 @@ void VReg_FreeHandle(HKEY hKey) {
 
 BOOL VReg_IsVirtualHandle(HKEY hKey) {
     return VReg_GetHandle(hKey) != NULL;
+}
+
+/* ---- Registry preset loading (VFS blob v2 'EREG' region) ---- */
+
+#define VREG_REG_MAGIC 0x47455245u /* 'EREG' */
+#define VREG_REG_MAX_KEYS     MAX_VREG_KEYS
+#define VREG_REG_MAX_VALUES   64
+
+static uint32_t VReg_ReadU32(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static void VReg_UpperA(char* s) {
+    for (; *s; ++s)
+        if (*s >= 'a' && *s <= 'z') *s = (char)(*s - 32);
+}
+
+/* 预载一个键的预置值。返回 0 成功；负数为格式/越界错误（调用方整体放弃）。 */
+static int32_t VReg_PreloadKey(const uint8_t** cursor, const uint8_t* end) {
+    const uint8_t* p = *cursor;
+    if (p + 4 > end) return -10;
+    uint32_t keyChars = VReg_ReadU32(p); p += 4;
+    if (keyChars == 0 || keyChars >= 512 || p + keyChars * 2 > end) return -11;
+    wchar_t keyW[512];
+    memcpy(keyW, p, keyChars * 2); keyW[keyChars] = 0; p += keyChars * 2;
+
+    char pathA[512];
+    if (!WideCharToMultiByte(CP_ACP, 0, keyW, -1, pathA, sizeof(pathA), NULL, NULL)) return -12;
+    VReg_UpperA(pathA);
+
+    if (p + 4 > end) return -13;
+    uint32_t valueCount = VReg_ReadU32(p); p += 4;
+    if (valueCount > VREG_REG_MAX_VALUES) return -14;
+
+    if (g_vreg_key_count >= VREG_REG_MAX_KEYS) return -15;
+    VREG_KEY* key = &g_vreg_keys[g_vreg_key_count++];
+    memset(key, 0, sizeof(*key));
+    strncpy_s(key->path, sizeof(key->path), pathA, _TRUNCATE);
+    key->value_capacity = valueCount;
+    key->values = (VREG_VALUE*)calloc(valueCount ? valueCount : 1, sizeof(VREG_VALUE));
+    if (!key->values) return -16;
+
+    for (uint32_t v = 0; v < valueCount; v++) {
+        if (p + 4 > end) return -17;
+        uint32_t nameChars = VReg_ReadU32(p); p += 4;
+        if (nameChars >= 256 || p + nameChars * 2 > end) return -17;
+        wchar_t nameW[256];
+        memcpy(nameW, p, nameChars * 2); nameW[nameChars] = 0; p += nameChars * 2;
+
+        if (p + 8 > end) return -18;
+        uint32_t type = VReg_ReadU32(p); p += 4;
+        uint32_t dataBytes = VReg_ReadU32(p); p += 4;
+        if (p + dataBytes > end) return -18;
+
+        VREG_VALUE* val = &key->values[key->value_count];
+        char nameA[256];
+        if (!WideCharToMultiByte(CP_ACP, 0, nameW, -1, nameA, sizeof(nameA), NULL, NULL)) return -19;
+        strncpy_s(val->name, sizeof(val->name), nameA, _TRUNCATE);
+        val->type = type;
+        val->data = NULL;
+        val->data_size = 0;
+
+        if (dataBytes) {
+            if (type == REG_SZ || type == REG_EXPAND_SZ) {
+                /* 文件内 UTF-16LE → 内存内 CP_ACP（A 族查询按 ANSI 读取） */
+                int need = WideCharToMultiByte(CP_ACP, 0, (const wchar_t*)p,
+                                               dataBytes / 2, NULL, 0, NULL, NULL);
+                if (need > 0) {
+                    val->data = (uint8_t*)malloc((size_t)need);
+                    if (val->data) {
+                        WideCharToMultiByte(CP_ACP, 0, (const wchar_t*)p, dataBytes / 2,
+                                            (char*)val->data, need, NULL, NULL);
+                        val->data_size = (uint32_t)need;
+                    }
+                }
+            } else {
+                val->data = (uint8_t*)malloc(dataBytes);
+                if (val->data) {
+                    memcpy(val->data, p, dataBytes);
+                    val->data_size = dataBytes;
+                }
+            }
+            p += dataBytes;
+        }
+        key->value_count++;
+    }
+    *cursor = p;
+    return 0;
+}
+
+int32_t VReg_Preload(const uint8_t* blob, uint32_t size) {
+    if (!blob || size < 8) return -1;
+    if (VReg_ReadU32(blob) != VREG_REG_MAGIC) return -2;
+    uint32_t count = VReg_ReadU32(blob + 4);
+    if (count > VREG_REG_MAX_KEYS) return -3;
+    if (VReg_Initialize() != 0) return -4;
+
+    const uint8_t* cursor = blob + 8;
+    const uint8_t* end = blob + size;
+    int32_t result = 0;
+    for (uint32_t k = 0; k < count; k++) {
+        result = VReg_PreloadKey(&cursor, end);
+        if (result != 0) break;
+    }
+    if (result != 0) {
+        /* 预载失败：清空已载入内容，registry 退化为空存储（全透传） */
+        VReg_Finalize();
+        VReg_Initialize();
+    }
+    return result;
 }
 
 /* ---- Hook implementations ---- */

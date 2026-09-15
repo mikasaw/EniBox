@@ -61,6 +61,7 @@ namespace EniBox.GUI.Services
         private readonly VfsDirNode _root = new() { Name = "" };
         private readonly ICompressor _compressor;
         private readonly List<PackFileItem> _allFiles = new();
+        private readonly List<PackRegistryValue> _registryValues = new();
 
         public VfsBuilder(ICompressor compressor)
         {
@@ -79,11 +80,18 @@ namespace EniBox.GUI.Services
             EnsureDirectory(virtualPath);
         }
 
+        /// <summary>注册表虚拟化预置值（Build 时序列化为 blob 尾部的 EREG 区）。</summary>
+        public void AddRegistryValue(PackRegistryValue value)
+        {
+            _registryValues.Add(value);
+        }
+
         public void Clear()
         {
             _root.Children.Clear();
             _root.Files.Clear();
             _allFiles.Clear();
+            _registryValues.Clear();
         }
 
         public VfsBuildResult Build()
@@ -273,6 +281,7 @@ namespace EniBox.GUI.Services
             var metadataStream = new MemoryStream();
             VfsHeader header;
             long headerPos;
+            var registryRegion = System.Array.Empty<byte>();
             using (var writer = new BinaryWriter(metadataStream, Encoding.UTF8, leaveOpen: true))
             {
                 headerPos = metadataStream.Position;
@@ -294,13 +303,18 @@ namespace EniBox.GUI.Services
                 var poolBytes = Encoding.UTF8.GetBytes(stringPool.ToString());
                 writer.Write(poolBytes);
 
+                registryRegion = SerializeRegistryRegion(_registryValues);
+
                 header.MetadataOffset = (uint)headerPos;
                 header.MetadataSize = (uint)metadataStream.Length;
-                // The serialized blob is [metadata][data]; the Loader resolves
-                // file data as blob_base + data_offset + entry.DataOffset, and
-                // entry offsets are relative to the data stream's own start.
+                // The serialized blob is [metadata][data][registry?]; the Loader
+                // resolves file data as blob_base + data_offset + entry.DataOffset,
+                // and entry offsets are relative to the data stream's own start.
                 header.DataOffset = (uint)metadataStream.Length;
                 header.DataSize = (uint)dataStream.Length;
+                // v2: 注册表预置值区挂在 data 之后、计入 vfs_total 与 CRC
+                header.RegistryOffset = (uint)(metadataStream.Length + dataStream.Length);
+                header.RegistrySize = (uint)registryRegion.Length;
 
                 // Rewrite the header so metadataBytes carries the real offset/
                 // size fields (checksum still 0): the Loader verifies the CRC
@@ -318,6 +332,8 @@ namespace EniBox.GUI.Services
             uint crc = Crc32.StartPartial();
             crc = Crc32.ContinueCompute(crc, metadataBytes);
             crc = Crc32.ContinueCompute(crc, dataRegion);
+            if (registryRegion.Length > 0)
+                crc = Crc32.ContinueCompute(crc, registryRegion);
             header.Checksum = Crc32.FinishPartial(crc);
 
             using (var writer = new BinaryWriter(metadataStream, Encoding.UTF8, leaveOpen: true))
@@ -334,11 +350,47 @@ namespace EniBox.GUI.Services
             {
                 Metadata = finalMetadata,
                 DataRegion = dataRegion,
+                RegistryRegion = registryRegion,
                 FileCount = files.Count,
                 DirCount = dirs.Count,
                 TotalOriginalSize = totalOriginalSize,
                 TotalCompressedSize = totalCompressedSize
             };
+        }
+
+        /// <summary>
+        /// 序列化注册表预置值区（blob 尾部；格式契约见 loader 侧
+        /// hook_registry.c::VReg_Preload，两端必须同步）：
+        ///   uint32 magic 'EREG'；uint32 count；
+        ///   每项: uint32 keyChars, key(UTF-16LE), uint32 valueCount,
+        ///         每值: uint32 nameChars, name(UTF-16LE), uint32 type, uint32 dataBytes, data
+        /// </summary>
+        private static byte[] SerializeRegistryRegion(List<PackRegistryValue> values)
+        {
+            if (values.Count == 0)
+                return Array.Empty<byte>();
+
+            using var ms = new MemoryStream();
+            using var writer = new BinaryWriter(ms);
+
+            writer.Write(0x47455245u); // 'EREG'
+            writer.Write((uint)values.Count);
+            foreach (var v in values)
+            {
+                var keyBytes = Encoding.Unicode.GetBytes(v.KeyPath ?? string.Empty);
+                writer.Write((uint)(keyBytes.Length / 2));
+                writer.Write(keyBytes);
+
+                var nameBytes = Encoding.Unicode.GetBytes(v.ValueName ?? string.Empty);
+                writer.Write(1u); // 每条目单值
+                writer.Write((uint)(nameBytes.Length / 2));
+                writer.Write(nameBytes);
+                writer.Write(v.Type);
+                writer.Write((uint)(v.Data?.Length ?? 0));
+                if (v.Data != null && v.Data.Length > 0)
+                    writer.Write(v.Data);
+            }
+            return ms.ToArray();
         }
 
         private VfsDirNode EnsureDirectory(string virtualPath)

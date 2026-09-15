@@ -353,14 +353,14 @@ namespace EniBox.Tests
         [Fact]
         public void VfsHeader_SizeMatchesCStruct()
         {
-            // VFS_HEADER has 11 uint32_t fields = 44 bytes
+            // VFS_HEADER has 13 uint32_t fields = 52 bytes（v2 含 RegistryOffset/RegistrySize）
             using var ms = new MemoryStream();
             using (var writer = new BinaryWriter(ms, Encoding.UTF8, true))
             {
                 var header = new VfsHeader
                 {
                     Magic = VfsHeader.MAGIC,
-                    Version = 1,
+                    Version = 2,
                     FileCount = 10,
                     DirCount = 5,
                     MetadataOffset = 100,
@@ -369,12 +369,14 @@ namespace EniBox.Tests
                     DataSize = 400,
                     LoaderOffset = 700,
                     LoaderSize = 50,
-                    Checksum = 0
+                    Checksum = 0,
+                    RegistryOffset = 800,
+                    RegistrySize = 25
                 };
                 header.WriteTo(writer);
             }
 
-            Assert.Equal(44, ms.Length); // 11 * 4 bytes
+            Assert.Equal(52, ms.Length); // 13 * 4 bytes
         }
 
         [Fact]

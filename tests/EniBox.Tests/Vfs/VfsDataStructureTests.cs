@@ -94,9 +94,10 @@ public class VfsHeaderSerializationTests
     }
     
     [Fact]
-    public void CurrentVersion_IsOne()
+    public void CurrentVersion_IsTwo()
     {
-        Assert.Equal(1u, VfsHeader.CURRENT_VERSION);
+        // v2: 注册表虚拟化预置值区（RegistryOffset/RegistrySize 字段）
+        Assert.Equal(2u, VfsHeader.CURRENT_VERSION);
     }
 }
 

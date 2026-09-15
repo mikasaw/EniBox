@@ -51,6 +51,13 @@ namespace EniBox.GUI.Services
                 {
                     _vfsBuilder.AddFile(file);
                 }
+                if (config.EnableRegistryVirtualization)
+                {
+                    foreach (var rv in config.RegistryValues)
+                    {
+                        _vfsBuilder.AddRegistryValue(rv);
+                    }
+                }
 
                 var vfsResult = _vfsBuilder.Build();
 
@@ -372,12 +379,16 @@ namespace EniBox.GUI.Services
 
         var vfsMetadata = vfsResult.Metadata;
         var vfsDataRegion = vfsResult.DataRegion;
-        uint vfsTotalSize = (uint)(vfsMetadata.Length + vfsDataRegion.Length);
+        var vfsRegistry = vfsResult.RegistryRegion;
+        // vfs_total 含注册表预置区（它计入 CRC 且 Loader 按 header v2 定位）
+        uint vfsTotalSize = (uint)(vfsMetadata.Length + vfsDataRegion.Length + vfsRegistry.Length);
         writer.Write(vfsTotalSize);
         writer.Write((uint)loaderData.Length);
 
         writer.Write(vfsMetadata);
         writer.Write(vfsDataRegion);
+        if (vfsRegistry.Length > 0)
+            writer.Write(vfsRegistry);
         writer.Write(loaderData);
 
         return ms.ToArray();

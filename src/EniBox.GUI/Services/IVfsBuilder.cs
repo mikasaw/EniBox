@@ -6,6 +6,7 @@ namespace EniBox.GUI.Services
     {
         void AddFile(PackFileItem file);
         void AddDirectory(string virtualPath);
+        void AddRegistryValue(PackRegistryValue value);
         VfsBuildResult Build();
         void Clear();
     }

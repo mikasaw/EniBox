@@ -1,4 +1,4 @@
-﻿#ifndef HOOK_REGISTRY_H
+#ifndef HOOK_REGISTRY_H
 #define HOOK_REGISTRY_H
 #include <windows.h>
 #include <stdint.h>
@@ -37,6 +37,11 @@ int32_t HookRegistry_Install(void);
 /* Virtual registry initialization - loads registry data from VFS */
 int32_t VReg_Initialize(void);
 void VReg_Finalize(void);
+
+/* 从 VFS blob v2 的 'EREG' 注册表预置区填充虚拟注册表（只读预置值；
+ * 对虚拟句柄的写入仅存在于本进程内存）。格式契约见 C# 侧
+ * VfsBuilder.SerializeRegistryRegion，两端必须同步。 */
+int32_t VReg_Preload(const uint8_t* blob, uint32_t size);
 
 /* Check if a registry path is virtualized */
 BOOL VReg_IsVirtualKeyA(const char* path);

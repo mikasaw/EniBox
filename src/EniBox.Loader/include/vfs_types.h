@@ -5,7 +5,7 @@
 #include <windows.h>
 
 #define VFS_MAGIC 0x42494E45
-#define VFS_VERSION 1
+#define VFS_VERSION 2
 #define VFS_INVALID_INDEX 0xFFFFFFFF
 
 #pragma pack(push, 1)
@@ -21,6 +21,10 @@ typedef struct _VFS_HEADER {
     uint32_t loader_offset;
     uint32_t loader_size;
     uint32_t checksum;
+    /* v2: 注册表虚拟化预置值区（blob 内偏移与大小；0/0 = 无）。写入端
+     * VfsBuilder.SerializeRegistryRegion，读取端 VReg_Preload，格式契约两端同步。 */
+    uint32_t registry_offset;
+    uint32_t registry_size;
 } VFS_HEADER;
 
 typedef struct _VFS_DIR_ENTRY {
