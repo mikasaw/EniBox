@@ -53,11 +53,9 @@ public class PackedVfsRuntimeTests : E2ETestBase
         });
 
         var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
-        if (!packResult.IsSuccess)
-        {
-            Logger.Warning($"⚠ 封包失败: {packResult.ErrorMessage}");
-            return;
-        }
+        // PeTool 缺失由 RequirePeTool 挡住并 Skip；走到这里封包就必须成功，
+        // 失败说明管线坏了，必须 FAIL（静默 return 是假绿）。
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
         Logger.Success($"✓ 封包成功: {packResult.OutputFileSize} bytes");
 
         // 运行封包后的 FileChecker，传入嵌入文件的路径
@@ -109,11 +107,7 @@ public class PackedVfsRuntimeTests : E2ETestBase
         });
 
         var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
-        if (!packResult.IsSuccess)
-        {
-            Logger.Warning($"⚠ 封包失败: {packResult.ErrorMessage}");
-            return;
-        }
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
         Logger.Success($"✓ 封包成功: {packResult.OutputFileSize} bytes");
 
         // 确认磁盘上确实不存在此文件
@@ -169,19 +163,11 @@ public class PackedVfsRuntimeTests : E2ETestBase
         });
 
         var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
-        if (!packResult.IsSuccess)
-        {
-            Logger.Warning($"⚠ 封包失败: {packResult.ErrorMessage}");
-            return;
-        }
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
         Logger.Success($"✓ 封包成功: {packResult.OutputFileSize} bytes, VFS文件数: {config.Files.Count}");
 
-        // 确认输出文件存在
-        if (!File.Exists(outputPath))
-        {
-            Logger.Warning($"⚠ 封包输出文件不存在，跳过运行验证");
-            return;
-        }
+        // 封包成功 = 输出文件必然存在，不存在说明写入链路有问题
+        Assert.True(File.Exists(outputPath), "封包成功但输出文件不存在");
 
         // 运行封包后的 VfsTest.exe（无参数，它会运行所有内置测试）
         var runResult = ProcessRunner.Run(outputPath, "", 15000);
@@ -230,10 +216,9 @@ public class PackedVfsRuntimeTests : E2ETestBase
     }
 
     /// <summary>
-    /// 验证: 封包后 fc.exe 正常退出（不超时挂起）。
-    /// 注意：某些 Windows 系统二进制（如 fc.exe）在封包后可能因 Loader 兼容性
-    /// 触发 STATUS_STACK_BUFFER_OVERRUN 而快速崩溃，但不会挂起。
-    /// 这是 Loader 的已知限制，不影响 VFS 文件读取等核心功能。
+    /// 验证: 封包后 fc.exe「真跑通」——给它两个内容不同的真实文件做比较，
+    /// 断言退出码 1（fc.exe 的"文件不同"语义）且输出含 "*****" 比较块。
+    /// 只有真跑通了文件比较，才证明 Loader hook 对原生系统二进制透明。
     /// 对应现有测试 PackedExeRunTests.E2E_PackedFcExe_RunsAndExitsNormally
     /// </summary>
 [SkippableFact]
@@ -245,28 +230,22 @@ public class PackedVfsRuntimeTests : E2ETestBase
         var outputPath = Path.Combine(TempFiles.CreateTempDirectory(), "fc_exit.enibox");
 
         var packResult = await PackExeAsync(sourcePath, outputPath);
-        if (!packResult.IsSuccess)
-        {
-            Logger.Warning($"⚠ 封包失败: {packResult.ErrorMessage}");
-            return;
-        }
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
         Logger.Success($"✓ 封包成功: {packResult.OutputFileSize} bytes");
+        Assert.True(File.Exists(outputPath), "封包成功但输出文件不存在");
 
-        // 确认输出文件存在
-        if (!File.Exists(outputPath))
-        {
-            Logger.Warning($"⚠ 封包输出文件不存在，跳过运行验证（可能的并行竞争）");
-            return;
-        }
+        // 两个内容不同的真实文件：fc.exe 应实际执行比较并报告差异
+        var file1 = TempFiles.CreateTempFile("hello", ".txt");
+        var file2 = TempFiles.CreateTempFile("world", ".txt");
 
-        // fc.exe 不带参数运行会显示帮助信息
-        var runResult = ProcessRunner.Run(outputPath, "", 10000);
+        var runResult = ProcessRunner.Run(outputPath, $"\"{file1}\" \"{file2}\"", 10000);
 
-        Logger.Info($"退出码: {runResult.ExitCode} (0xC0000409=STATUS_STACK_BUFFER_OVERRUN 是已知限制)");
+        Logger.Info($"退出码: {runResult.ExitCode}");
         Logger.Info($"输出: {runResult.StandardOutput}");
 
-        // 核心验证：封包程序不会无限挂起
         Assert.False(runResult.TimedOut, "封包 fc.exe 不应超时挂起");
-        Logger.Success("✓ 封包 fc.exe 正常退出，未挂起");
+        Assert.Equal(1, runResult.ExitCode);
+        Assert.Contains("*****", runResult.StandardOutput);
+        Logger.Success("✓ 封包 fc.exe 真跑通：实际完成两文件比较并报告差异（exit=1）");
     }
 }
