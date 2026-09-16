@@ -59,6 +59,18 @@ jobs:
       # -r 构建的输出在 win-x64 子目录，--no-build 会找不到测试程序集；
       # 让 dotnet test 自带构建以保持 RID 一致
       - run: dotnet test tests/EniBox.Tests/EniBox.Tests.csproj -c Release -r win-x64 --logger "console;verbosity=detailed"
+      - name: WER Application Error 取证（封包产物 0xC0000005 故障模块）
+        if: failure()
+        shell: pwsh
+        run: |
+          $errs = Get-WinEvent -FilterHashtable @{ LogName='Application'; Id=1000; StartTime=(Get-Date).AddMinutes(-30) } `
+                    -ErrorAction SilentlyContinue | Where-Object { $_.Message -match '0xc0000005|0xC0000005' }
+          if ($errs) {
+            Write-Host "=== WER Application Error (最近30分钟) ==="
+            foreach ($e in $errs) { Write-Host ($e.Message -split "`n" | Select-Object -First 6) }
+          } else {
+            Write-Host "no WER app-crash events"
+          }
 
   e2e-verify:
     needs: [dotnet-build, msvc-build]
