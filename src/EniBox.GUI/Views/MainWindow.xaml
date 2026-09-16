@@ -47,6 +47,11 @@
                           AllowDrop="True" SelectionMode="Extended" CanUserAddRows="False"
                           SelectedItem="{Binding SelectedFileItem}"
                           SelectionChanged="FileDataGrid_SelectionChanged">
+                    <DataGrid.ItemContainerStyle>
+                        <Style TargetType="DataGridRow">
+                            <Setter Property="AutomationProperties.Name" Value="{Binding VirtualPath}"/>
+                        </Style>
+                    </DataGrid.ItemContainerStyle>
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="{DynamicResource Str_VirtualPath}" Binding="{Binding VirtualPath}" Width="2*"/>
                         <DataGridTextColumn Header="{DynamicResource Str_SourcePath}" Binding="{Binding SourcePath}" Width="2*" IsReadOnly="True"/>
@@ -79,6 +84,11 @@
                           SelectedItem="{Binding SelectedRegistryPreset}"
                           SelectionChanged="RegistryDataGrid_SelectionChanged"
                           MinHeight="60" MaxHeight="120">
+                    <DataGrid.ItemContainerStyle>
+                        <Style TargetType="DataGridRow">
+                            <Setter Property="AutomationProperties.Name" Value="{Binding KeyPath}"/>
+                        </Style>
+                    </DataGrid.ItemContainerStyle>
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="{DynamicResource Str_RegKey}" Binding="{Binding KeyPath}" Width="2.5*"/>
                         <DataGridTextColumn Header="{DynamicResource Str_RegName}" Binding="{Binding ValueName}" Width="*"/>
