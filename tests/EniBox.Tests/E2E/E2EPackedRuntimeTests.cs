@@ -394,4 +394,67 @@ public class PackedVfsRuntimeTests : E2ETestBase
         Assert.Contains("CHECK:REG_REAL:OK", runResult.StandardOutput);
         Logger.Success("✓ 注册表虚拟化：预置值在封包程序内可读，真实注册表不受影响");
     }
+
+    /// <summary>
+    /// 验证: 注册表持久化 — 作用域子树内运行时建键/写值落盘 &lt;产物&gt;.vreg.bin，
+    /// 重启后读回（持久化优先）；删除 sidecar 即重置为预置值；全程真实注册表
+    /// HKCU\Software\EniBoxTest\Runtime 不存在（写隔离）。
+    /// </summary>
+[SkippableFact]
+    public async Task E2E_PackedRegChecker_RegistryPersistenceRoundTrip()
+    {
+        RequirePeTool();
+        RequireHelper("RegChecker");
+
+        // 防御性清理：真实注册表中不应存在的运行时键（历史遗留会干扰 MISS 断言）
+        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\EniBoxTest\Runtime", false); }
+        catch { /* 忽略 */ }
+
+        var regCheckerPath = TestExeBuilder.GetHelperPath("RegChecker");
+        var outputDir = TempFiles.CreateTempDirectory();
+        var outputPath = Path.Combine(outputDir, "regchecker.enibox");
+        var sidecarPath = outputPath + ".vreg.bin";
+
+        var config = new PackConfiguration
+        {
+            SourceExePath = regCheckerPath,
+            OutputPath = outputPath,
+            EnableSubProcessInjection = true,
+            EnableRegistryVirtualization = true
+        };
+        config.RegistryValues.Add(PackRegistryValue.FromString(
+            @"HKEY_CURRENT_USER\Software\EniBoxTest", "TestValue", "preset-registry-20260916"));
+
+        var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
+        Assert.False(File.Exists(sidecarPath), "首启前不应存在 sidecar");
+
+        // 运行 1：子树内新建键并写值 → 落盘
+        var writeResult = ProcessRunner.Run(outputPath, "write persist-value-20260916", 15000);
+        Logger.Info($"写入退出码: {writeResult.ExitCode}\n{writeResult.StandardOutput}");
+        Assert.False(writeResult.TimedOut, "写入运行不应超时");
+        Assert.Contains("CHECK:REG_WRITE:OK", writeResult.StandardOutput);
+        Assert.True(File.Exists(sidecarPath), "写值后应生成 .vreg.bin sidecar");
+
+        // 真实注册表隔离：写值只进虚拟存储 + sidecar
+        using (var realKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\EniBoxTest\Runtime"))
+            Assert.Null(realKey);
+
+        // 运行 2（重启）：sidecar 整体替换预置值，运行时写值读回，预置值仍在
+        var read1 = ProcessRunner.Run(outputPath, "read", 15000);
+        Logger.Info($"读回退出码: {read1.ExitCode}\n{read1.StandardOutput}");
+        Assert.False(read1.TimedOut, "读回运行不应超时");
+        Assert.Contains("CHECK:REG_PERSIST:OK:persist-value-20260916", read1.StandardOutput);
+        Assert.Contains("CHECK:REG_PRESET:OK:preset-registry-20260916", read1.StandardOutput);
+
+        // 重置：删除 sidecar → 回到预置值语义，运行时键随持久化消失
+        File.Delete(sidecarPath);
+        var read2 = ProcessRunner.Run(outputPath, "read", 15000);
+        Logger.Info($"重置后退出码: {read2.ExitCode}\n{read2.StandardOutput}");
+        Assert.False(read2.TimedOut, "重置后运行不应超时");
+        Assert.Contains("CHECK:REG_PERSIST:MISS", read2.StandardOutput);
+        Assert.Contains("CHECK:REG_PRESET:OK:preset-registry-20260916", read2.StandardOutput);
+
+        Logger.Success("✓ 注册表持久化：写→重启→读回；删档重置为预置值；真实注册表零写入");
+    }
 }
