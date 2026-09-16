@@ -53,7 +53,9 @@ jobs:
       - run: |
           dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release -r win-x64 --no-restore --nologo -v:minimal
           dotnet build tests/EniBox.Tests/EniBox.Tests.csproj -c Release -r win-x64 --no-restore --nologo -v:minimal
-      - run: dotnet test tests/EniBox.Tests/EniBox.Tests.csproj -c Release --no-build --logger "console;verbosity=detailed"
+      # -r 构建的输出在 win-x64 子目录，--no-build 会找不到测试程序集；
+      # 让 dotnet test 自带构建以保持 RID 一致
+      - run: dotnet test tests/EniBox.Tests/EniBox.Tests.csproj -c Release -r win-x64 --logger "console;verbosity=detailed"
 
   e2e-verify:
     needs: [dotnet-build, msvc-build]
