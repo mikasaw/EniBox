@@ -457,4 +457,123 @@ public class PackedVfsRuntimeTests : E2ETestBase
 
         Logger.Success("✓ 注册表持久化：写→重启→读回；删档重置为预置值；真实注册表零写入");
     }
+
+    /// <summary>
+    /// 验证: 注册表删除语义 + sidecar 损坏回退 —
+    /// 删值跨启动持久；有子键时删键被拒（ACCESS_DENIED）；删子键后再删父键成功；
+    /// 全程真实注册表零写入；sidecar CRC 损坏时回退预置值（持久化优先失效）。
+    /// </summary>
+[SkippableFact]
+    public async Task E2E_PackedRegChecker_RegistryDeleteAndCorruptFallback()
+    {
+        RequirePeTool();
+        RequireHelper("RegChecker");
+
+        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\EniBoxTest", false); }
+        catch { /* 忽略 */ }
+
+        var regCheckerPath = TestExeBuilder.GetHelperPath("RegChecker");
+        var outputDir = TempFiles.CreateTempDirectory();
+        var outputPath = Path.Combine(outputDir, "regchecker.enibox");
+        var sidecarPath = outputPath + ".vreg.bin";
+
+        var config = new PackConfiguration
+        {
+            SourceExePath = regCheckerPath,
+            OutputPath = outputPath,
+            EnableSubProcessInjection = true,
+            EnableRegistryVirtualization = true
+        };
+        config.RegistryValues.Add(PackRegistryValue.FromString(
+            @"HKEY_CURRENT_USER\Software\EniBoxTest", "TestValue", "preset-del-20260916"));
+
+        var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
+
+        void AssertOut(ProcessRunner r, string contains, string stage)        {
+            Assert.False(r.TimedOut, $"{stage} 不应超时");
+            Assert.True(r.StandardOutput.Contains(contains),
+                $"{stage} 期望包含 '{contains}'，实际输出:\n{r.StandardOutput}");
+        }
+
+        // 删值往返：写 → 删 → 读（MISS 持久化）
+        AssertOut(ProcessRunner.Run(outputPath, "write del-target-1", 15000), "CHECK:REG_WRITE:OK", "写入");
+        AssertOut(ProcessRunner.Run(outputPath, "del", 15000), "CHECK:REG_DEL:OK", "删值");
+        Assert.True(File.Exists(sidecarPath), "删值后 sidecar 应存在（存储即真相）");
+        var read1 = ProcessRunner.Run(outputPath, "read", 15000);
+        AssertOut(read1, "CHECK:REG_PERSIST:MISS", "删值后读回");
+        AssertOut(read1, "CHECK:REG_PRESET:OK:preset-del-20260916", "预置值不受删值影响");
+
+        // 删键守卫：有子键时 ACCESS_DENIED(5)；持句柄删除后旧句柄按 ERROR_KEY_DELETED(1018) 拒绝
+        // （delopen 同时完成 Sub 键的删除）
+        AssertOut(ProcessRunner.Run(outputPath, "sub subval-1", 15000), "CHECK:REG_SUB:OK", "孙键写入");
+        var delKey1 = ProcessRunner.Run(outputPath, "delkey", 15000);
+        AssertOut(delKey1, "CHECK:REG_DELKEY:FAIL:rc=5", "有子键删键被拒");
+        AssertOut(ProcessRunner.Run(outputPath, "delopen", 15000), "CHECK:REG_DELOPEN:OK:1018", "墓碑句柄语义");
+        AssertOut(ProcessRunner.Run(outputPath, "delkey", 15000), "CHECK:REG_DELKEY:OK", "删父键");
+        // 作用域根保护：删除根会使子树退出虚拟化（真实注册表逃逸），拒绝
+        AssertOut(ProcessRunner.Run(outputPath, "delroot", 15000), "CHECK:REG_DELROOT:FAIL:rc=5", "作用域根删除被拒");
+        var read2 = ProcessRunner.Run(outputPath, "read", 15000);
+        AssertOut(read2, "CHECK:REG_PERSIST:MISS", "删键后读回");
+        AssertOut(read2, "CHECK:REG_PRESET:OK:preset-del-20260916", "预置键仍在");
+
+        // 真实注册表隔离
+        using (var realKey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\EniBoxTest"))
+            Assert.Null(realKey);
+
+        // sidecar 损坏回退：CRC 失败 → 回退预置值
+        AssertOut(ProcessRunner.Run(outputPath, "write v-after-rebuild", 15000), "CHECK:REG_WRITE:OK", "重建 sidecar");
+        var bytes = File.ReadAllBytes(sidecarPath);
+        Assert.True(bytes.Length > 20, "sidecar 应有实质内容");
+        bytes[16] ^= 0xFF; // body[4]（keyCount 首字节）翻转 → CRC 必然失配
+        File.WriteAllBytes(sidecarPath, bytes);
+        var read3 = ProcessRunner.Run(outputPath, "read", 15000);
+        AssertOut(read3, "CHECK:REG_PERSIST:MISS", "损坏 sidecar 不提供运行时值");
+        AssertOut(read3, "CHECK:REG_PRESET:OK:preset-del-20260916", "损坏 sidecar 回退预置值");
+
+        Logger.Success("✓ 注册表删除：值/键删除跨启动持久、子键守卫、损坏回退预置值；真实注册表零写入");
+    }
+
+    /// <summary>
+    /// 验证: 同一键路径的多条预置值全部可读 — 回归：序列化器曾把同键多值
+    /// 拆成多个独立键槽，FindKey 只命中第一个导致第二条起静默丢失（验收
+    /// 复现的 P1）。现 C# 侧按 KeyPath 聚合、Loader 侧同路径合并双保险。
+    /// </summary>
+[SkippableFact]
+    public async Task E2E_PackedRegChecker_MultiValueSameKey()
+    {
+        RequirePeTool();
+        RequireHelper("RegChecker");
+
+        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\EniBoxTest", false); }
+        catch { /* 忽略 */ }
+
+        var regCheckerPath = TestExeBuilder.GetHelperPath("RegChecker");
+        var outputDir = TempFiles.CreateTempDirectory();
+        var outputPath = Path.Combine(outputDir, "regchecker.enibox");
+
+        var config = new PackConfiguration
+        {
+            SourceExePath = regCheckerPath,
+            OutputPath = outputPath,
+            EnableSubProcessInjection = true,
+            EnableRegistryVirtualization = true
+        };
+        config.RegistryValues.Add(PackRegistryValue.FromString(
+            @"HKEY_CURRENT_USER\Software\EniBoxTest", "TestValue", "multi-preset-1"));
+        config.RegistryValues.Add(PackRegistryValue.FromString(
+            @"HKEY_CURRENT_USER\Software\EniBoxTest", "SecondValue", "multi-preset-2"));
+        config.RegistryValues.Add(PackRegistryValue.FromDword(
+            @"HKEY_CURRENT_USER\Software\EniBoxTest", "CountValue", 42));
+
+        var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
+
+        var runResult = ProcessRunner.Run(outputPath, "read", 15000);
+        Logger.Info($"输出:\n{runResult.StandardOutput}");
+        Assert.False(runResult.TimedOut, "不应超时");
+        Assert.Contains("CHECK:REG_PRESET:OK:multi-preset-1", runResult.StandardOutput);
+        Assert.Contains("CHECK:REG_SECOND:OK:multi-preset-2", runResult.StandardOutput);
+        Logger.Success("✓ 同键多预置值全部可读（含 DWORD 混合类型）");
+    }
 }
