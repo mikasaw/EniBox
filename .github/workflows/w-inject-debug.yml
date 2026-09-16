@@ -24,6 +24,7 @@ jobs:
           msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
       - name: 编译 Tests
         run: |
+          dotnet restore -r win-x64
           dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release -r win-x64 --no-restore --nologo -v:minimal
           dotnet build tests/EniBox.Tests/EniBox.Tests.csproj -c Release -r win-x64 --no-restore --nologo -v:minimal
       - name: 构建测试辅助程序
