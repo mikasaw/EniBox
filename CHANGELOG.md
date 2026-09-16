@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **注册表删除语义** — `RegDeleteValue`/`RegDeleteKey`/`RegDeleteTree`/`RegDeleteKeyEx` 全部挂钩（钩子 11→19）：删除跨启动持久（存储即真相）、删键有子键时返回 ACCESS_DENIED 与真实注册表一致、`RegDeleteTree` 删子键与值键本身保留、已开句柄按 `ERROR_KEY_DELETED` 拒绝（墓碑槽位实现）、**作用域根删除被拒绝**（防止子树退出虚拟化后写入逃逸到真实注册表）
 - **虚拟父句柄路径解析** — 以虚拟句柄为父句柄的 Open/Create/Delete 子键操作不再落穿透（BuildKeyPath 解析句柄指向的键路径）
+- **sidecar 原子替换** — 写值落盘改为「进程唯一临时名 + MoveFileEx 原子替换」，读者侧共享 DELETE 语义：并发实例下 sidecar 始终完整，torn 写窗口归零
 - **CLI 预置注册表值** — `--registry-value KEY|NAME|TYPE|DATA`（可重复；TYPE ∈ SZ|EXPAND_SZ|DWORD|BINARY，缺省 SZ），配合 `--registry-virtualization` 全 CLI 化封包；开关与预置值不匹配时双向告警
 
 ### Fixed

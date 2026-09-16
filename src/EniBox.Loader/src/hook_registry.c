@@ -537,11 +537,11 @@ void VReg_SetSidecarPathW(const wchar_t* path) {
 
 BOOL VReg_LoadSidecar(void) {
     if (!g_vreg_sidecar_path[0]) return FALSE;
-    /* 共享读写打开：兄弟实例 SAVE（独占写）瞬间不误判为无档；
-     * 读到部分内容时由 CRC/解析兜底回退预置值 */
+    /* 共享读写删打开：并发实例 SAVE（原子替换需要 DELETE 语义）期间不误判
+     * 为无档；读到部分内容时由 CRC/解析兜底回退预置值 */
     HANDLE h = CreateFileW(g_vreg_sidecar_path, GENERIC_READ,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                           OPEN_EXISTING, 0, NULL);
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE) return FALSE; /* 首启无 sidecar：保留预置值 */
 
     BOOL ok = FALSE;
@@ -592,7 +592,16 @@ BOOL VReg_SaveSidecar(void) {
     VReg_StoreU32(file + 12 + body.size, VReg_Crc32(body.data, body.size));
     free(body.data);
 
-    HANDLE h = CreateFileW(g_vreg_sidecar_path, GENERIC_WRITE, 0, NULL,
+    /* 原子替换：先写进程唯一临时名再 MoveFileEx——并发实例的读者要么看到
+     * 旧完整文件要么看到新完整文件（CRC 兜底不变，torn 写窗口归零） */
+    wchar_t tmpPath[1040];
+    if (_snwprintf_s(tmpPath, 1040, _TRUNCATE, L"%s.%u.tmp",
+                     g_vreg_sidecar_path, GetCurrentProcessId()) <= 0) {
+        free(file);
+        EniBox_DiagLine("vreg save: tmp path failed");
+        return FALSE;
+    }
+    HANDLE h = CreateFileW(tmpPath, GENERIC_WRITE, 0, NULL,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         free(file);
@@ -603,8 +612,17 @@ BOOL VReg_SaveSidecar(void) {
     BOOL ok = WriteFile(h, file, total, &written, NULL) && written == total;
     CloseHandle(h);
     free(file);
-    if (!ok) EniBox_DiagLine("vreg save: write failed");
-    return ok;
+    if (!ok) {
+        DeleteFileW(tmpPath);
+        EniBox_DiagLine("vreg save: write failed");
+        return FALSE;
+    }
+    if (MoveFileExW(tmpPath, g_vreg_sidecar_path,
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        return TRUE;
+    DeleteFileW(tmpPath);
+    EniBox_DiagLine("vreg save: replace failed");
+    return FALSE;
 }
 
 /* ---- Hook implementations ---- */

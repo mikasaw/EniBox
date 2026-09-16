@@ -576,4 +576,58 @@ public class PackedVfsRuntimeTests : E2ETestBase
         Assert.Contains("CHECK:REG_SECOND:OK:multi-preset-2", runResult.StandardOutput);
         Logger.Success("✓ 同键多预置值全部可读（含 DWORD 混合类型）");
     }
+
+    /// <summary>
+    /// 验证: 多实例并发（后写赢）— 顺序写时最后写者胜；并发写后 sidecar 仍
+    /// 完整可读（原子替换），最终值为并发写者之一，无 .tmp 残留。
+    /// </summary>
+[SkippableFact]
+    public async Task E2E_PackedRegChecker_MultiInstanceLastWriteWins()
+    {
+        RequirePeTool();
+        RequireHelper("RegChecker");
+
+        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(@"Software\EniBoxTest", false); }
+        catch { /* 忽略 */ }
+
+        var regCheckerPath = TestExeBuilder.GetHelperPath("RegChecker");
+        var outputDir = TempFiles.CreateTempDirectory();
+        var outputPath = Path.Combine(outputDir, "regchecker.enibox");
+
+        var config = new PackConfiguration
+        {
+            SourceExePath = regCheckerPath,
+            OutputPath = outputPath,
+            EnableSubProcessInjection = true,
+            EnableRegistryVirtualization = true
+        };
+        config.RegistryValues.Add(PackRegistryValue.FromString(
+            @"HKEY_CURRENT_USER\Software\EniBoxTest", "TestValue", "preset-multi-inst"));
+
+        var packResult = await PackService.PackAsync(config, null, CancellationToken.None);
+        Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
+
+        // 顺序写：后写赢
+        var w1 = ProcessRunner.Run(outputPath, "write seq-alpha", 15000);
+        Assert.Contains("CHECK:REG_WRITE:OK", w1.StandardOutput);
+        var w2 = ProcessRunner.Run(outputPath, "write seq-beta", 15000);
+        Assert.Contains("CHECK:REG_WRITE:OK", w2.StandardOutput);
+        var r1 = ProcessRunner.Run(outputPath, "read", 15000);
+        Assert.Contains("CHECK:REG_PERSIST:OK:seq-beta", r1.StandardOutput);
+
+        // 并发写：双方各自整库落盘，最终值必为写者之一且 sidecar 完整
+        var t1 = Task.Run(() => ProcessRunner.Run(outputPath, "write conc-alpha", 20000));
+        var t2 = Task.Run(() => ProcessRunner.Run(outputPath, "write conc-beta", 20000));
+        Task.WaitAll(t1, t2);
+        var r2 = ProcessRunner.Run(outputPath, "read", 15000);
+        Logger.Info($"并发后读回:\n{r2.StandardOutput}");
+        Assert.False(r2.TimedOut);
+        var hitAlpha = r2.StandardOutput.Contains("CHECK:REG_PERSIST:OK:conc-alpha");
+        var hitBeta = r2.StandardOutput.Contains("CHECK:REG_PERSIST:OK:conc-beta");
+        Assert.True(hitAlpha || hitBeta, $"并发后应读到写者之一，实际:\n{r2.StandardOutput}");
+
+        // 原子替换成功后无 .tmp 残留
+        Assert.Empty(Directory.GetFiles(outputDir, "*.tmp"));
+        Logger.Success("✓ 多实例并发：后写赢、sidecar 原子替换完整、无临时文件残留");
+    }
 }
