@@ -2,9 +2,11 @@
  * Registry Virtualization Hooks
  *
  * Hooks RegOpenKeyExA/W, RegCreateKeyExA/W, RegQueryValueExA/W, RegCloseKey,
- * RegEnumValueA/W, RegSetValueExA/W to redirect registry access to virtual
- * registry data stored in the VFS. This allows applications that read/write
- * registry settings to work without actually touching the system registry.
+ * RegEnumValueA/W, RegSetValueExA/W, RegDeleteValueA/W, RegDeleteKeyA/W,
+ * RegDeleteTreeA/W, RegDeleteKeyExA/W to redirect registry access to virtual
+ * registry data stored in the VFS. This allows applications that read/write/
+ * delete registry settings to work without actually touching the system
+ * registry (19 hooks).
  *
  * Scope rule: every virtualized key path declares a scope root; the whole
  * subtree below it (prefix rule) is virtualized, including keys created at
@@ -36,6 +38,14 @@ typedef LONG (WINAPI *RegCreateKeyExA_t)(HKEY, LPCSTR, DWORD, LPSTR, DWORD, REGS
     const SECURITY_ATTRIBUTES*, PHKEY, LPDWORD);
 typedef LONG (WINAPI *RegCreateKeyExW_t)(HKEY, LPCWSTR, DWORD, LPWSTR, DWORD, REGSAM,
     const SECURITY_ATTRIBUTES*, PHKEY, LPDWORD);
+typedef LONG (WINAPI *RegDeleteValueA_t)(HKEY, LPCSTR);
+typedef LONG (WINAPI *RegDeleteValueW_t)(HKEY, LPCWSTR);
+typedef LONG (WINAPI *RegDeleteKeyA_t)(HKEY, LPCSTR);
+typedef LONG (WINAPI *RegDeleteKeyW_t)(HKEY, LPCWSTR);
+typedef LONG (WINAPI *RegDeleteTreeA_t)(HKEY, LPCSTR);
+typedef LONG (WINAPI *RegDeleteTreeW_t)(HKEY, LPCWSTR);
+typedef LONG (WINAPI *RegDeleteKeyExA_t)(HKEY, LPCSTR, REGSAM, DWORD);
+typedef LONG (WINAPI *RegDeleteKeyExW_t)(HKEY, LPCWSTR, REGSAM, DWORD);
 
 static RegOpenKeyExA_t   g_orig_RegOpenKeyExA   = NULL;
 static RegOpenKeyExW_t   g_orig_RegOpenKeyExW   = NULL;
@@ -48,6 +58,14 @@ static RegSetValueExA_t  g_orig_RegSetValueExA  = NULL;
 static RegSetValueExW_t  g_orig_RegSetValueExW  = NULL;
 static RegCreateKeyExA_t g_orig_RegCreateKeyExA = NULL;
 static RegCreateKeyExW_t g_orig_RegCreateKeyExW = NULL;
+static RegDeleteValueA_t g_orig_RegDeleteValueA = NULL;
+static RegDeleteValueW_t g_orig_RegDeleteValueW = NULL;
+static RegDeleteKeyA_t   g_orig_RegDeleteKeyA   = NULL;
+static RegDeleteKeyW_t   g_orig_RegDeleteKeyW   = NULL;
+static RegDeleteTreeA_t  g_orig_RegDeleteTreeA  = NULL;
+static RegDeleteTreeW_t  g_orig_RegDeleteTreeW  = NULL;
+static RegDeleteKeyExA_t g_orig_RegDeleteKeyExA = NULL;
+static RegDeleteKeyExW_t g_orig_RegDeleteKeyExW = NULL;
 
 /* ---- Virtual registry state ---- */
 
@@ -80,6 +98,15 @@ static void BuildKeyPathA(char* buf, uint32_t size, HKEY hKey, const char* subKe
     else if (hk == 0x80000000) root = "HKEY_CLASSES_ROOT";
     else if (hk == 0x80000003) root = "HKEY_USERS";
     else if (hk == 0x80000005) root = "HKEY_CURRENT_CONFIG";
+    else {
+        /* 虚拟句柄：以句柄指向的键路径为根——open/create/delete 以虚拟句柄
+         * 为父句柄时不再落穿透（墓碑句柄解析为空路径，走原 subKey 回退） */
+        VREG_HANDLE* vh = VReg_GetHandle(hKey);
+        if (vh && vh->is_virtual && vh->key_index < g_vreg_key_count &&
+            g_vreg_keys[vh->key_index].path[0] != '\0') {
+            root = g_vreg_keys[vh->key_index].path;
+        }
+    }
 
     if (root && subKey)
         sprintf_s(buf, size, "%s\\%s", root, subKey);
@@ -97,12 +124,24 @@ static void BuildKeyPathA(char* buf, uint32_t size, HKEY hKey, const char* subKe
 
 static void BuildKeyPathW(wchar_t* buf, uint32_t size, HKEY hKey, const wchar_t* subKey) {
     const wchar_t* root = NULL;
+    wchar_t wideRoot[512] = {0}; /* 函数域存活：虚拟句柄根路径的宽字符转换目标 */
     uint32_t hk = RegHandleId(hKey);
     if (hk == 0x80000002)      root = L"HKEY_LOCAL_MACHINE";
     else if (hk == 0x80000001) root = L"HKEY_CURRENT_USER";
     else if (hk == 0x80000000) root = L"HKEY_CLASSES_ROOT";
     else if (hk == 0x80000003) root = L"HKEY_USERS";
     else if (hk == 0x80000005) root = L"HKEY_CURRENT_CONFIG";
+    else {
+        /* 虚拟句柄：宽/窄路径等价（键路径为 ANSI 大写），转宽拼接 */
+        VREG_HANDLE* vh = VReg_GetHandle(hKey);
+        if (vh && vh->is_virtual && vh->key_index < g_vreg_key_count &&
+            g_vreg_keys[vh->key_index].path[0] != '\0') {
+            if (MultiByteToWideChar(CP_ACP, 0, g_vreg_keys[vh->key_index].path, -1,
+                                    wideRoot, 512) > 0) {
+                root = wideRoot;
+            }
+        }
+    }
 
     if (root && subKey)
         swprintf_s(buf, size, L"%s\\%s", root, subKey);
@@ -150,7 +189,7 @@ void VReg_Finalize(void) {
 }
 
 int32_t VReg_FindKeyA(const char* path) {
-    if (!path) return -1;
+    if (path == NULL || path[0] == '\0') return -1; /* 空串不得命中墓碑槽位 */
     char normalized[512];
     strncpy_s(normalized, 512, path, 511);
     for (uint32_t i = 0; normalized[i]; i++)
@@ -184,8 +223,10 @@ BOOL VReg_IsVirtualKeyW(const wchar_t* path) {
  * 或以「某根 + '\'」为前缀。根的父链与兄弟路径（如根...\APPX）不在作用域内。 */
 
 static BOOL VReg_IsInScopeA(const char* pathUpper) {
+    if (pathUpper == NULL || pathUpper[0] == '\0') return FALSE;
     for (uint32_t i = 0; i < g_vreg_key_count; i++) {
         const char* root = g_vreg_keys[i].path;
+        if (root[0] == '\0') continue; /* 墓碑槽位 */
         size_t len = strlen(root);
         if (strncmp(pathUpper, root, len) == 0 &&
             (pathUpper[len] == '\0' || pathUpper[len] == '\\'))
@@ -196,6 +237,7 @@ static BOOL VReg_IsInScopeA(const char* pathUpper) {
 
 /* 查找或创建虚拟键（调用方需持有 g_vreg_lock）。返回索引或 -1（表满/分配失败）。 */
 static int32_t VReg_EnsureKeyA(const char* pathUpper) {
+    if (pathUpper == NULL || pathUpper[0] == '\0') return -1;
     int32_t idx = VReg_FindKeyA(pathUpper);
     if (idx >= 0) return idx;
     if (g_vreg_key_count >= MAX_VREG_KEYS) return -1;
@@ -287,12 +329,25 @@ static int32_t VReg_LoadKey(const uint8_t** cursor, const uint8_t* end, BOOL raw
     }
 
     if (g_vreg_key_count >= VREG_REG_MAX_KEYS) return -15;
-    VREG_KEY* key = &g_vreg_keys[g_vreg_key_count++];
-    memset(key, 0, sizeof(*key));
-    strncpy_s(key->path, sizeof(key->path), pathA, _TRUNCATE);
-    key->value_capacity = valueCount;
-    key->values = (VREG_VALUE*)calloc(valueCount ? valueCount : 1, sizeof(VREG_VALUE));
-    if (!key->values) return -16;
+    /* 同路径重复条目（防御旧打包器/手造 blob）：值并入既有槽位而非新建，
+     * 否则 FindKey 只命中第一个，后续条目的值不可达 */
+    int32_t existing = VReg_FindKeyA(pathA);
+    VREG_KEY* key;
+    if (existing >= 0) {
+        key = &g_vreg_keys[existing];
+    } else {
+        key = &g_vreg_keys[g_vreg_key_count++];
+        memset(key, 0, sizeof(*key));
+        strncpy_s(key->path, sizeof(key->path), pathA, _TRUNCATE);
+    }
+    if (key->value_capacity < key->value_count + valueCount) {
+        uint32_t newCap = key->value_count + valueCount;
+        VREG_VALUE* nv = (VREG_VALUE*)realloc(key->values, newCap * sizeof(VREG_VALUE));
+        if (!nv) return -16;
+        memset(nv + key->value_count, 0, (newCap - key->value_count) * sizeof(VREG_VALUE));
+        key->values = nv;
+        key->value_capacity = newCap;
+    }
 
     for (uint32_t v = 0; v < valueCount; v++) {
         if (p + 4 > end) return -17;
@@ -443,12 +498,18 @@ static void VReg_StoreU32(uint8_t* p, uint32_t v) {
     p[3] = (uint8_t)((v >> 24) & 0xFF);
 }
 
-/* 整库序列化为 'EREG' 区格式（含 magic）。锁内只读快照。 */
+/* 整库序列化为 'EREG' 区格式（含 magic）。锁内只读快照。
+ * 墓碑槽位（path[0]=0，已删除键）不写入。 */
 static BOOL VReg_SerializeStore(VREG_BUF* body) {
     EnterCriticalSection(&g_vreg_lock);
-    BOOL ok = VReg_BufU32(body, VREG_REG_MAGIC) && VReg_BufU32(body, g_vreg_key_count);
+    uint32_t live = 0;
+    for (uint32_t i = 0; i < g_vreg_key_count; i++) {
+        if (g_vreg_keys[i].path[0] != '\0') live++;
+    }
+    BOOL ok = VReg_BufU32(body, VREG_REG_MAGIC) && VReg_BufU32(body, live);
     for (uint32_t i = 0; ok && i < g_vreg_key_count; i++) {
         VREG_KEY* key = &g_vreg_keys[i];
+        if (key->path[0] == '\0') continue;
         ok = VReg_BufUtf16StrA(body, key->path) && VReg_BufU32(body, key->value_count);
         for (uint32_t v = 0; ok && v < key->value_count; v++) {
             VREG_VALUE* val = &key->values[v];
@@ -682,30 +743,39 @@ static LONG WINAPI Hook_RegQueryValueExA(HKEY hKey, LPCSTR lpValueName,
 {
     VREG_HANDLE* vh = VReg_GetHandle(hKey);
     if (vh && vh->is_virtual && vh->key_index < g_vreg_key_count) {
+        /* 锁内读：与删除（free）互斥，避免无锁读 freed 内存 */
+        EnterCriticalSection(&g_vreg_lock);
+        LONG result = ERROR_FILE_NOT_FOUND;
         VREG_KEY* key = &g_vreg_keys[vh->key_index];
         const char* name = lpValueName ? lpValueName : "";
-
-        for (uint32_t i = 0; i < key->value_count; i++) {
-            if (strcmp(key->values[i].name, name) == 0) {
-                VREG_VALUE* val = &key->values[i];
-                if (lpType) *lpType = val->type;
-                if (lpcbData) {
-                    if (lpData) {
-                        if (val->data_size <= *lpcbData) {
-                            memcpy(lpData, val->data, val->data_size);
-                            *lpcbData = val->data_size;
+        if (key->path[0] == '\0') {
+            result = ERROR_KEY_DELETED; /* 已删除键的遗留句柄 */
+        } else {
+            for (uint32_t i = 0; i < key->value_count; i++) {
+                if (strcmp(key->values[i].name, name) == 0) {
+                    VREG_VALUE* val = &key->values[i];
+                    if (lpType) *lpType = val->type;
+                    if (lpcbData) {
+                        if (lpData) {
+                            if (val->data_size <= *lpcbData) {
+                                memcpy(lpData, val->data, val->data_size);
+                                *lpcbData = val->data_size;
+                            } else {
+                                *lpcbData = val->data_size;
+                                result = ERROR_MORE_DATA;
+                                break;
+                            }
                         } else {
                             *lpcbData = val->data_size;
-                            return ERROR_MORE_DATA;
                         }
-                    } else {
-                        *lpcbData = val->data_size;
                     }
+                    result = ERROR_SUCCESS;
+                    break;
                 }
-                return ERROR_SUCCESS;
             }
         }
-        return ERROR_FILE_NOT_FOUND;
+        LeaveCriticalSection(&g_vreg_lock);
+        return result;
     }
     return g_orig_RegQueryValueExA(hKey, lpValueName, lpReserved, lpType, lpData, lpcbData);
 }
@@ -716,6 +786,8 @@ static LONG WINAPI Hook_RegQueryValueExW(HKEY hKey, LPCWSTR lpValueName,
 {
     VREG_HANDLE* vh = VReg_GetHandle(hKey);
     if (vh && vh->is_virtual && vh->key_index < g_vreg_key_count) {
+        EnterCriticalSection(&g_vreg_lock);
+        LONG result = ERROR_FILE_NOT_FOUND;
         VREG_KEY* key = &g_vreg_keys[vh->key_index];
 
         char narrowName[256];
@@ -724,27 +796,34 @@ static LONG WINAPI Hook_RegQueryValueExW(HKEY hKey, LPCWSTR lpValueName,
         else
             narrowName[0] = '\0';
 
-        for (uint32_t i = 0; i < key->value_count; i++) {
-            if (strcmp(key->values[i].name, narrowName) == 0) {
-                VREG_VALUE* val = &key->values[i];
-                if (lpType) *lpType = val->type;
-                if (lpcbData) {
-                    if (lpData) {
-                        if (val->data_size <= *lpcbData) {
-                            memcpy(lpData, val->data, val->data_size);
-                            *lpcbData = val->data_size;
+        if (key->path[0] == '\0') {
+            result = ERROR_KEY_DELETED; /* 已删除键的遗留句柄 */
+        } else {
+            for (uint32_t i = 0; i < key->value_count; i++) {
+                if (strcmp(key->values[i].name, narrowName) == 0) {
+                    VREG_VALUE* val = &key->values[i];
+                    if (lpType) *lpType = val->type;
+                    if (lpcbData) {
+                        if (lpData) {
+                            if (val->data_size <= *lpcbData) {
+                                memcpy(lpData, val->data, val->data_size);
+                                *lpcbData = val->data_size;
+                            } else {
+                                *lpcbData = val->data_size;
+                                result = ERROR_MORE_DATA;
+                                break;
+                            }
                         } else {
                             *lpcbData = val->data_size;
-                            return ERROR_MORE_DATA;
                         }
-                    } else {
-                        *lpcbData = val->data_size;
                     }
+                    result = ERROR_SUCCESS;
+                    break;
                 }
-                return ERROR_SUCCESS;
             }
         }
-        return ERROR_FILE_NOT_FOUND;
+        LeaveCriticalSection(&g_vreg_lock);
+        return result;
     }
     return g_orig_RegQueryValueExW(hKey, lpValueName, lpReserved, lpType, lpData, lpcbData);
 }
@@ -763,23 +842,30 @@ static LONG WINAPI Hook_RegEnumValueA(HKEY hKey, DWORD dwIndex, LPSTR lpValueNam
 {
     VREG_HANDLE* vh = VReg_GetHandle(hKey);
     if (vh && vh->is_virtual && vh->key_index < g_vreg_key_count) {
+        EnterCriticalSection(&g_vreg_lock);
+        LONG result;
         VREG_KEY* key = &g_vreg_keys[vh->key_index];
-        if (dwIndex >= key->value_count)
-            return ERROR_NO_MORE_ITEMS;
-
-        VREG_VALUE* val = &key->values[dwIndex];
-        if (lpValueName && lpcchValueName) {
-            strncpy_s(lpValueName, *lpcchValueName, val->name, _TRUNCATE);
-            *lpcchValueName = (DWORD)strlen(val->name);
-        }
-        if (lpType) *lpType = val->type;
-        if (lpcbData) {
-            if (lpData && val->data_size <= *lpcbData) {
-                memcpy(lpData, val->data, val->data_size);
+        if (key->path[0] == '\0') {
+            result = ERROR_KEY_DELETED; /* 已删除键的遗留句柄 */
+        } else if (dwIndex >= key->value_count) {
+            result = ERROR_NO_MORE_ITEMS;
+        } else {
+            VREG_VALUE* val = &key->values[dwIndex];
+            if (lpValueName && lpcchValueName) {
+                strncpy_s(lpValueName, *lpcchValueName, val->name, _TRUNCATE);
+                *lpcchValueName = (DWORD)strlen(val->name);
             }
-            *lpcbData = val->data_size;
+            if (lpType) *lpType = val->type;
+            if (lpcbData) {
+                if (lpData && val->data_size <= *lpcbData) {
+                    memcpy(lpData, val->data, val->data_size);
+                }
+                *lpcbData = val->data_size;
+            }
+            result = ERROR_SUCCESS;
         }
-        return ERROR_SUCCESS;
+        LeaveCriticalSection(&g_vreg_lock);
+        return result;
     }
     return g_orig_RegEnumValueA(hKey, dwIndex, lpValueName, lpcchValueName,
                                  lpReserved, lpType, lpData, lpcbData);
@@ -791,23 +877,30 @@ static LONG WINAPI Hook_RegEnumValueW(HKEY hKey, DWORD dwIndex, LPWSTR lpValueNa
 {
     VREG_HANDLE* vh = VReg_GetHandle(hKey);
     if (vh && vh->is_virtual && vh->key_index < g_vreg_key_count) {
+        EnterCriticalSection(&g_vreg_lock);
+        LONG result;
         VREG_KEY* key = &g_vreg_keys[vh->key_index];
-        if (dwIndex >= key->value_count)
-            return ERROR_NO_MORE_ITEMS;
-
-        VREG_VALUE* val = &key->values[dwIndex];
-        if (lpValueName && lpcchValueName) {
-            MultiByteToWideChar(CP_ACP, 0, val->name, -1, lpValueName, *lpcchValueName);
-            *lpcchValueName = (DWORD)wcslen(lpValueName);
-        }
-        if (lpType) *lpType = val->type;
-        if (lpcbData) {
-            if (lpData && val->data_size <= *lpcbData) {
-                memcpy(lpData, val->data, val->data_size);
+        if (key->path[0] == '\0') {
+            result = ERROR_KEY_DELETED; /* 已删除键的遗留句柄 */
+        } else if (dwIndex >= key->value_count) {
+            result = ERROR_NO_MORE_ITEMS;
+        } else {
+            VREG_VALUE* val = &key->values[dwIndex];
+            if (lpValueName && lpcchValueName) {
+                MultiByteToWideChar(CP_ACP, 0, val->name, -1, lpValueName, *lpcchValueName);
+                *lpcchValueName = (DWORD)wcslen(lpValueName);
             }
-            *lpcbData = val->data_size;
+            if (lpType) *lpType = val->type;
+            if (lpcbData) {
+                if (lpData && val->data_size <= *lpcbData) {
+                    memcpy(lpData, val->data, val->data_size);
+                }
+                *lpcbData = val->data_size;
+            }
+            result = ERROR_SUCCESS;
         }
-        return ERROR_SUCCESS;
+        LeaveCriticalSection(&g_vreg_lock);
+        return result;
     }
     return g_orig_RegEnumValueW(hKey, dwIndex, lpValueName, lpcchValueName,
                                  lpReserved, lpType, lpData, lpcbData);
@@ -824,8 +917,13 @@ static LONG WINAPI Hook_RegSetValueExA(HKEY hKey, LPCSTR lpValueName,
         LONG result;
 
         /* 变更段持锁：序列化线程不得在 free→malloc 窗口读到悬垂指针
-         * （CS 可重入，随后的 SaveSidecar 再入安全） */
+         * （CS 可重入，随后的 SaveSidecar 再入安全）。墓碑守卫必须在锁内
+         * 复查——锁外检查与并发删除存在窗口。 */
         EnterCriticalSection(&g_vreg_lock);
+        if (key->path[0] == '\0') {
+            LeaveCriticalSection(&g_vreg_lock);
+            return ERROR_KEY_DELETED;
+        }
         /* Find existing value or add new one */
         result = -1;
         for (uint32_t i = 0; result == -1 && i < key->value_count; i++) {
@@ -898,6 +996,212 @@ static LONG WINAPI Hook_RegSetValueExW(HKEY hKey, LPCWSTR lpValueName,
 
 /* ---- Installation ---- */
 
+/* ---- 删除钩子（B-3）：存储即真相——删除立即整库落盘；删 sidecar 重置才会
+ * 让预置值回来。键删除采用墓碑槽位（path[0]=0）：数组索引保持稳定，已分配
+ * 句柄不失效，后续查询/写入按 ERROR_KEY_DELETED 语义拒绝。 ---- */
+
+static LONG WINAPI Hook_RegDeleteValueA(HKEY hKey, LPCSTR lpValueName)
+{
+    VREG_HANDLE* vh = VReg_GetHandle(hKey);
+    if (vh && vh->is_virtual && vh->key_index < g_vreg_key_count) {
+        VREG_KEY* key = &g_vreg_keys[vh->key_index];
+        const char* name = lpValueName ? lpValueName : "";
+
+        EnterCriticalSection(&g_vreg_lock);
+        LONG result;
+        if (key->path[0] == '\0') {
+            /* 墓碑守卫在锁内复查（与并发删除的窗口竞争） */
+            LeaveCriticalSection(&g_vreg_lock);
+            return ERROR_KEY_DELETED;
+        }
+        result = ERROR_FILE_NOT_FOUND;
+        for (uint32_t i = 0; i < key->value_count; i++) {
+            if (strcmp(key->values[i].name, name) == 0) {
+                if (key->values[i].data) free(key->values[i].data);
+                /* 保持枚举顺序：整体前移 */
+                memmove(&key->values[i], &key->values[i + 1],
+                        (key->value_count - i - 1) * sizeof(VREG_VALUE));
+                key->value_count--;
+                memset(&key->values[key->value_count], 0, sizeof(VREG_VALUE));
+                result = ERROR_SUCCESS;
+                break;
+            }
+        }
+        LeaveCriticalSection(&g_vreg_lock);
+        if (result == ERROR_SUCCESS) VReg_SaveSidecar();
+        return result;
+    }
+    return g_orig_RegDeleteValueA(hKey, lpValueName);
+}
+
+static LONG WINAPI Hook_RegDeleteValueW(HKEY hKey, LPCWSTR lpValueName)
+{
+    VREG_HANDLE* vh = VReg_GetHandle(hKey);
+    if (vh && vh->is_virtual) {
+        char narrowName[256];
+        if (lpValueName)
+            WideCharToMultiByte(CP_ACP, 0, lpValueName, -1, narrowName, 256, NULL, NULL);
+        else
+            narrowName[0] = '\0';
+        return Hook_RegDeleteValueA(hKey, narrowName);
+    }
+    return g_orig_RegDeleteValueW(hKey, lpValueName);
+}
+
+/* 作用域内删除虚拟键的核心（A/W 共用，fullPath 为大写 ANSI 全路径）：
+ * 有虚拟子键 → ERROR_ACCESS_DENIED（与真实 API 语义一致）；
+ * 不存在 → ERROR_FILE_NOT_FOUND（纯虚拟语义，绝不写真实注册表）。 */
+static LONG VReg_DeleteKeyCoreA(const char* fullPath) {
+    EnterCriticalSection(&g_vreg_lock);
+    int32_t idx = VReg_FindKeyA(fullPath);
+    if (idx < 0) {
+        LeaveCriticalSection(&g_vreg_lock);
+        return ERROR_FILE_NOT_FOUND;
+    }
+    /* 作用域根保护：无存活祖先键的键是作用域锚——删除它会使整个子树退出
+     * 虚拟化（后续 Create/Write 透传真实注册表），故拒绝（语义与真实 API
+     * 的「有子键不可删」同族）。中段键（有存活祖先）仍可删，祖先继续锚定。 */
+    {
+        BOOL hasLiveAncestor = FALSE;
+        for (uint32_t i = 0; i < g_vreg_key_count; i++) {
+            const char* p = g_vreg_keys[i].path;
+            if (p[0] == '\0') continue;
+            size_t plen = strlen(p);
+            if (strncmp(fullPath, p, plen) == 0 && fullPath[plen] == '\\') {
+                hasLiveAncestor = TRUE;
+                break;
+            }
+        }
+        if (!hasLiveAncestor) {
+            LeaveCriticalSection(&g_vreg_lock);
+            return ERROR_ACCESS_DENIED;
+        }
+    }
+    size_t len = strlen(fullPath);
+    for (uint32_t i = 0; i < g_vreg_key_count; i++) {
+        const char* p = g_vreg_keys[i].path;
+        if (i != (uint32_t)idx && strncmp(p, fullPath, len) == 0 &&
+            p[len] == '\\') {
+            LeaveCriticalSection(&g_vreg_lock);
+            return ERROR_ACCESS_DENIED;
+        }
+    }
+    VREG_KEY* key = &g_vreg_keys[idx];
+    for (uint32_t v = 0; v < key->value_count; v++) {
+        if (key->values[v].data) free(key->values[v].data);
+    }
+    free(key->values);
+    /* 墓碑槽位：路径置空 + 释放值数组；索引不变，已开句柄按已删语义拒绝 */
+    memset(key, 0, sizeof(*key));
+    LeaveCriticalSection(&g_vreg_lock);
+    VReg_SaveSidecar();
+    return ERROR_SUCCESS;
+}
+
+static LONG WINAPI Hook_RegDeleteKeyA(HKEY hKey, LPCSTR lpSubKey)
+{
+    if (lpSubKey) {
+        char fullPath[512];
+        BuildKeyPathA(fullPath, 512, hKey, lpSubKey);
+        if (VReg_IsInScopeA(fullPath))
+            return VReg_DeleteKeyCoreA(fullPath);
+    }
+    return g_orig_RegDeleteKeyA(hKey, lpSubKey);
+}
+
+static LONG WINAPI Hook_RegDeleteKeyW(HKEY hKey, LPCWSTR lpSubKey)
+{
+    if (lpSubKey) {
+        wchar_t fullPathW[512];
+        BuildKeyPathW(fullPathW, 512, hKey, lpSubKey);
+        char fullPath[512] = {0};
+        WideCharToMultiByte(CP_ACP, 0, fullPathW, -1, fullPath, 512, NULL, NULL);
+        if (VReg_IsInScopeA(fullPath))
+            return VReg_DeleteKeyCoreA(fullPath);
+    }
+    return g_orig_RegDeleteKeyW(hKey, lpSubKey);
+}
+
+/* RegDeleteTree 语义：删子键与值，键本身保留。树删核心（fullPath 存活键）：
+ * 全部后代墓碑化 + 本键值清空，一次落盘。 */
+static LONG VReg_DeleteTreeCoreA(const char* fullPath) {
+    EnterCriticalSection(&g_vreg_lock);
+    int32_t idx = VReg_FindKeyA(fullPath);
+    if (idx < 0) {
+        LeaveCriticalSection(&g_vreg_lock);
+        return ERROR_FILE_NOT_FOUND;
+    }
+    size_t len = strlen(fullPath);
+    for (uint32_t i = 0; i < g_vreg_key_count; i++) {
+        VREG_KEY* k = &g_vreg_keys[i];
+        if (k->path[0] == '\0') continue;
+        if (strncmp(k->path, fullPath, len) == 0 && k->path[len] == '\\') {
+            for (uint32_t v = 0; v < k->value_count; v++) {
+                if (k->values[v].data) free(k->values[v].data);
+            }
+            free(k->values);
+            memset(k, 0, sizeof(*k));
+        }
+    }
+    VREG_KEY* key = &g_vreg_keys[idx];
+    for (uint32_t v = 0; v < key->value_count; v++) {
+        if (key->values[v].data) free(key->values[v].data);
+    }
+    free(key->values);
+    key->values = NULL;
+    key->value_count = 0;
+    key->value_capacity = 0;
+    LeaveCriticalSection(&g_vreg_lock);
+    VReg_SaveSidecar();
+    return ERROR_SUCCESS;
+}
+
+static LONG WINAPI Hook_RegDeleteTreeA(HKEY hKey, LPCSTR lpSubKey)
+{
+    char fullPath[512];
+    BuildKeyPathA(fullPath, 512, hKey, lpSubKey);
+    if (VReg_IsInScopeA(fullPath))
+        return VReg_DeleteTreeCoreA(fullPath);
+    return g_orig_RegDeleteTreeA(hKey, lpSubKey);
+}
+
+static LONG WINAPI Hook_RegDeleteTreeW(HKEY hKey, LPCWSTR lpSubKey)
+{
+    wchar_t fullPathW[512];
+    BuildKeyPathW(fullPathW, 512, hKey, lpSubKey);
+    char fullPath[512] = {0};
+    WideCharToMultiByte(CP_ACP, 0, fullPathW, -1, fullPath, 512, NULL, NULL);
+    if (VReg_IsInScopeA(fullPath))
+        return VReg_DeleteTreeCoreA(fullPath);
+    return g_orig_RegDeleteTreeW(hKey, lpSubKey);
+}
+
+static LONG WINAPI Hook_RegDeleteKeyExA(HKEY hKey, LPCSTR lpSubKey, REGSAM samDesired,
+                                        DWORD Reserved)
+{
+    if (lpSubKey) {
+        char fullPath[512];
+        BuildKeyPathA(fullPath, 512, hKey, lpSubKey);
+        if (VReg_IsInScopeA(fullPath))
+            return VReg_DeleteKeyCoreA(fullPath);
+    }
+    return g_orig_RegDeleteKeyExA(hKey, lpSubKey, samDesired, Reserved);
+}
+
+static LONG WINAPI Hook_RegDeleteKeyExW(HKEY hKey, LPCWSTR lpSubKey, REGSAM samDesired,
+                                        DWORD Reserved)
+{
+    if (lpSubKey) {
+        wchar_t fullPathW[512];
+        BuildKeyPathW(fullPathW, 512, hKey, lpSubKey);
+        char fullPath[512] = {0};
+        WideCharToMultiByte(CP_ACP, 0, fullPathW, -1, fullPath, 512, NULL, NULL);
+        if (VReg_IsInScopeA(fullPath))
+            return VReg_DeleteKeyCoreA(fullPath);
+    }
+    return g_orig_RegDeleteKeyExW(hKey, lpSubKey, samDesired, Reserved);
+}
+
 int32_t HookRegistry_Install(void) {
     VReg_Initialize();
 
@@ -923,6 +1227,22 @@ int32_t HookRegistry_Install(void) {
         (void**)&g_orig_RegCreateKeyExA) != MH_OK) return -10;
     if (MH_CreateHook(&RegCreateKeyExW, &Hook_RegCreateKeyExW,
         (void**)&g_orig_RegCreateKeyExW) != MH_OK) return -11;
+    if (MH_CreateHook(&RegDeleteValueA, &Hook_RegDeleteValueA,
+        (void**)&g_orig_RegDeleteValueA) != MH_OK) return -12;
+    if (MH_CreateHook(&RegDeleteValueW, &Hook_RegDeleteValueW,
+        (void**)&g_orig_RegDeleteValueW) != MH_OK) return -13;
+    if (MH_CreateHook(&RegDeleteKeyA, &Hook_RegDeleteKeyA,
+        (void**)&g_orig_RegDeleteKeyA) != MH_OK) return -14;
+    if (MH_CreateHook(&RegDeleteKeyW, &Hook_RegDeleteKeyW,
+        (void**)&g_orig_RegDeleteKeyW) != MH_OK) return -15;
+    if (MH_CreateHook(&RegDeleteTreeA, &Hook_RegDeleteTreeA,
+        (void**)&g_orig_RegDeleteTreeA) != MH_OK) return -16;
+    if (MH_CreateHook(&RegDeleteTreeW, &Hook_RegDeleteTreeW,
+        (void**)&g_orig_RegDeleteTreeW) != MH_OK) return -17;
+    if (MH_CreateHook(&RegDeleteKeyExA, &Hook_RegDeleteKeyExA,
+        (void**)&g_orig_RegDeleteKeyExA) != MH_OK) return -18;
+    if (MH_CreateHook(&RegDeleteKeyExW, &Hook_RegDeleteKeyExW,
+        (void**)&g_orig_RegDeleteKeyExW) != MH_OK) return -19;
 
     return 0;
 }
