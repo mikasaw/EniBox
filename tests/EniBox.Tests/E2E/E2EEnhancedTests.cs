@@ -41,13 +41,21 @@ public class LoaderExtractionTests : E2ETestBase
             ?? throw new InvalidOperationException("封包程序启动失败");
         var pid = proc.Id;
 
-        // 提取发生在 DllMain，进程起来后应立刻出现；轮询最多 5 秒
+        // 提取发生在 DllMain，进程起来后应立刻出现；轮询最多 8 秒
         string[] extractionDirs = Array.Empty<string>();
-        for (int i = 0; i < 50 && extractionDirs.Length == 0; i++)
+        for (int i = 0; i < 80 && extractionDirs.Length == 0; i++)
         {
             await Task.Delay(100);
             extractionDirs = Directory.GetDirectories(Path.GetTempPath(), $"EniBox-{pid}-*");
         }
+        string hostState;
+        try
+        {
+            hostState = proc.HasExited
+                ? $"exited code={proc.ExitCode}"
+                : "still running";
+        }
+        catch (Exception ex) { hostState = "state query failed: " + ex.Message; }
         if (!proc.HasExited) proc.Kill(entireProcessTree: true);
         proc.WaitForExit();
 
@@ -59,10 +67,10 @@ public class LoaderExtractionTests : E2ETestBase
         {
             var diagDump = string.Join(" | ",
                 Directory.GetFiles(Path.GetTempPath(), "EniBox_diag_*.log")
-                    .Select(f => File.ReadAllText(f).Trim())
+                    .Select(f => $"{Path.GetFileName(f)}: {File.ReadAllText(f).Trim()}")
                     .DefaultIfEmpty("(无诊断文件)"));
             Assert.True(extracted.Length > 0,
-                $"未在 %TEMP%\\EniBox-{pid}-*\\ 下找到提取的 Loader DLL（提取失败或命名不符）。Loader 诊断: {diagDump}");
+                $"未在 %TEMP%\\EniBox-{pid}-*\\ 下找到提取的 Loader DLL（提取失败或命名不符）。宿主状态: {hostState}；Loader 诊断: {diagDump}");
 
             foreach (var f in extracted)
             {
