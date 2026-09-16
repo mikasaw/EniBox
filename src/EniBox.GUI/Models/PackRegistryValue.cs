@@ -3,9 +3,10 @@ using System;
 namespace EniBox.GUI.Models
 {
     /// <summary>
-    /// 注册表虚拟化的预置值：封包时写入 VFS，Loader 在进程初始化时预载到
-    /// 进程内虚拟注册表。范围语义：预置键可读（含值），对虚拟句柄的写入
-    /// 仅存在于本进程内存（不持久化、不污染真实注册表）；未预置的键完全
+    /// 注册表虚拟化的预置值：封包时写入 VFS，Loader 在进程初始化时预载。
+    /// 范围语义：预置键路径即作用域根，整个子树（含运行时新建键）虚拟化；
+    /// 写入不触碰真实注册表，并持久化到产物同目录 &lt;产物&gt;.vreg.bin；
+    /// sidecar 存在时整体替换预置值（预置仅首启生效）；作用域外的键完全
     /// 透传真实注册表。
     /// </summary>
     public sealed class PackRegistryValue

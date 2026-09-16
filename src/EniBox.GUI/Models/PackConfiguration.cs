@@ -11,7 +11,9 @@ namespace EniBox.GUI.Models
         public bool EnableSubProcessInjection { get; set; } = true;
         /// <summary>
         /// 注册表虚拟化预置值（仅在 EnableRegistryVirtualization=true 时生效）。
-        /// 语义：预置键可读；对虚拟句柄的写入仅进程内有效（不持久化）。
+        /// 语义：预置键路径即作用域根，整个子树（含运行时新建键）虚拟化；
+        /// 写入隔离于真实注册表之外，并持久化到产物同目录 &lt;产物&gt;.vreg.bin
+        /// （删除该文件即重置为预置值）。
         /// </summary>
         public List<PackRegistryValue> RegistryValues { get; set; } = new();
     }
