@@ -154,7 +154,7 @@ Test 9: Sub-Process Injection       → test_SubProcessInjectionStrategy (P0-03,
 
 **D3 专项现状（2026-09-15 探针重测后已恢复启用）**: 探针实证上游 MinHook 在 Win11 26200 上处理 Nt 层（NtCreateFile/NtOpenFile/NtReadFile）与进程链（CreateProcessW/A）的 trampoline 完全可用——旧"必崩"结论是陈旧嵌入 Loader 字节造成的误诊。三项探针：① Nt 层启用后 VfsTest 9/9，透传/CRC 读取全部穿过 detour；② 进程链启用后 9/9；③ 非跳过名单子进程 W/A 两族注入成功（cdb 子进程调试确认 Loader 落在子进程）。现已在 hook_manager.c 恢复启用，并实现子进程 VFS 继承：父注入前写 VfsLink 握手文件（`%TEMP%\EniBox-<pid>-<rnd>\EniBox.VfsLink`，含父镜像路径），注入的 Loader 在子进程 DllMain 中映射父镜像、拷贝 .enibox 内 VFS blob 到私有内存并初始化；封包子进程（含 .enibox 节）跳过注入以防同名模块遮蔽。E2E `E2E_PackedSubProcHost_ChildInheritsParentVfs` 覆盖全链路。注意 ShouldInjectProcess 跳过名单（cmd.exe/conhost/System32 等）内的子进程不注入、不继承 VFS。 注册表虚拟化（Phase 2）：VFS blob v2（header 52 字节，含 RegistryOffset/RegistrySize）尾部携带 'EREG' 预置值区，Loader 启动时 VReg_Preload 预载到进程内虚拟注册表。**破坏性变更**：v1 封包产物不再被新 Loader 接受（version<2 拒绝），旧产物需重新封包。预定义根键句柄比较采用低 32 位归一化（修复 SDK 符号扩展 vs 应用零扩展的失配）。
 
-**注册表持久化（2026-09-16，B/B/A/A/A 语义）**: ① 作用域 = 前缀子树规则——预置键路径即作用域根，子树内（含运行时 RegCreateKeyEx 新建键，新增 A/W 两钩子，现共 11 钩子）全部虚拟化；作用域外完全透传。② 存储 = 封包产物同目录 `<产物路径>.vreg.bin`（继承子进程经父镜像路径推导同一路径，父子读写同一份）。③ 合并 = 持久化优先——启动时 sidecar 存在且 CRC 校验通过则整体替换预置值（预置仅首启生效），缺失/损坏回退预置值。④ 并发 = 后写赢无锁（写值/新建键即整库落盘，格式 `[ENIVREG1][u32 bodySize]['EREG' body][u32 crc32]`，body 复用 'EREG' 区格式、数据按写入原始字节存取不做编码转换）。⑤ 重置 = 删除 sidecar 即回到预置值。已知边界：sidecar 明文；RegDeleteValue/RegDeleteKey 未挂钩（删除不会从持久化移除条目）；真实注册表已存在的同路径值在作用域内会被遮蔽且不导入。E2E `E2E_PackedRegChecker_RegistryPersistenceRoundTrip` 覆盖 写→退出→重启读回→删档重置→真实注册表零写入 全链路（RegChecker 助手新增 `write <v>`/`read` 两模式）。其他已知边界：以虚拟句柄为父句柄再 RegOpenKeyEx/RegCreateKeyEx 子键时路径解析会落穿透（安全返回真实错误码，不崩溃）；并发实例读写同一 sidecar 为后写赢、读取侧以共享模式容忍写入瞬间。
+**注册表持久化（2026-09-16，B/B/A/A/A 语义）**: ① 作用域 = 前缀子树规则——预置键路径即作用域根，子树内（含运行时 RegCreateKeyEx 新建键）全部虚拟化；作用域外完全透传。② 存储 = 封包产物同目录 `<产物路径>.vreg.bin`（继承子进程经父镜像路径推导同一路径，父子读写同一份）。③ 合并 = 持久化优先——启动时 sidecar 存在且 CRC 校验通过则整体替换预置值（预置仅首启生效），缺失/损坏回退预置值。④ 并发 = 后写赢无锁（写值/新建键即整库落盘，格式 `[ENIVREG1][u32 bodySize]['EREG' body][u32 crc32]`，body 复用 'EREG' 区格式、数据按写入原始字节存取不做编码转换）。⑤ 重置 = 删除 sidecar 即回到预置值。已知边界：sidecar 明文；真实注册表已存在的同路径值在作用域内会被遮蔽且不导入。E2E `E2E_PackedRegChecker_RegistryPersistenceRoundTrip` 覆盖 写→退出→重启读回→删档重置→真实注册表零写入 全链路（RegChecker 助手 `write <v>`/`read` 模式）。并发实例读写同一 sidecar 为后写赢、读取侧以共享模式容忍写入瞬间。**删除语义（2026-09-16 B-3，验收修复后）**：RegDeleteValue/RegDeleteKey/RegDeleteTree/RegDeleteKeyEx 全部挂钩（钩子 11→19），键删除采用墓碑槽位（path[0]=0，数组索引稳定、已开句柄按 ERROR_KEY_DELETED=1018（winerror.h 实值，非 1016） 拒绝；槽位不复用，反复建/删键最终受 512 槽上限约束、进程重启恢复），序列化跳过空槽——存储即真相，删 sidecar 重置后预置值（含被删预置值）恢复。防逃逸守卫：删除**作用域根**（无存活祖先键）被拒绝 ACCESS_DENIED，防止子树退出虚拟化后写入透传真实注册表；RegDeleteTree 按真实语义删子键+值、键本身保留。BuildKeyPath 已支持虚拟父句柄路径解析（open/create/delete 以虚拟句柄为父不再落穿透）。E2E `E2E_PackedRegChecker_RegistryDeleteAndCorruptFallback` 覆盖 删值持久/子键守卫 ACCESS_DENIED/墓碑句柄 1018/根删除拒绝/损坏回退；`E2E_PackedRegChecker_MultiValueSameKey` 回归同键多预置值聚合（验收 P1：曾拆多槽致第二条起不可达）。CLI 预置值：`--registry-value KEY|NAME|TYPE|DATA`（可重复，TYPE∈SZ|EXPAND_SZ|DWORD|BINARY，SZ 文本不含 `|`，见 CLI.md）。
 
 **2026-09-15 已修复的根因链（历史存档）**:
 1. `PE_ModMergeImports` 三态逻辑全部损坏：常规 MSVC 镜像导入表无冗余空间 → 静默跳过仍返回成功（Loader 从未进导入表）；空表路径越界必返回 SECTION_FULL。
@@ -239,6 +239,40 @@ Defender 实时扫描新注入的 Loader DLL/子进程镜像相关（扫描窗�
 本地开发机（防护开）偶发同类失败时，Loader 按设计优雅降级（子进程无
 VFS 但正常运行），诊断文件 %TEMP%\EniBox_diag_<pid>.log 可定位失败步骤。
 调查关闭，诊断点永久保留。
+
+### 5.1.6 封包产物在部分 runner 宿主机启动即 0xC0000005（开放问题，2026-09-16 B-2 取证）
+
+**现象**：2026-09-16 15:40 UTC 前后起，CI 测试 job 逐轮一绿一红；失败轮中封包产物
+（fc_vfs_only.enibox / cmd_loader_test.enibox 等）启动即 `0xC0000005`（-1073741819），
+stdout 为空。同一天 06:41/07:35 UTC **相同树哈希内容多次全绿**（树哈希
+64fc3330… 对比验证），源码、编译器（MSVC 14.44.35207）、镜像标签均无差异。
+
+**取证链（ci.yml WER + diag 双取证点）**：
+1. WER Application Error（事件 ID 1000）：`Faulting module name: unknown,
+   version 0.0.0.0`，故障地址 ~0x11ad0（极低地址跳转签名）。
+2. **决定性交叉证据**：崩溃进程 PID（0x830/0x1698/0x1be0）在 `%TEMP%` 中
+   **均无对应 EniBox_diag_<pid>.log**，而同轮成功的封包进程全部有
+   `dllmain attach`——即 **Loader DLL 的 DllMain 从未在崩溃进程执行**，
+   .enibox 节 VA 占位符未被修补 → bootstrap 跳到垃圾地址。
+3. 进程能启动并执行到 EP（而非加载期 STATUS_DLL_NOT_FOUND 失败）→
+   导入描述符被 Windows 加载器**静默跳过**（§5.1 D3 同族的 load-only
+   import 处理差异），不是 DLL 解析失败。
+
+**windows-2022 采样（workflow_dispatch ×3 + push ×1）**：3 败/1 过，与
+windows-latest 无显著差异 → 排除单一镜像代因素；两代镜像宿主均受影响。
+已回退测试 job 至 windows-latest（ci.yml 注释保留采样结论）。
+
+**时间相关性**：当日 ~07:40 UTC 起出现，疑为 GitHub Windows runner 宿主机
+侧服务/安全组件滚动变更改变了导入处理行为；待宿主侧回滚或稳定后自愈的可能
+性存在。缓解：失败 job 重跑（当前实践）；ci.yml 的 WER+diag 取证步骤保留，
+后续失败自动留证。
+
+**产品级风险与后续方向**（P1，独立任务）：该机制意味着在部分 Windows 环境
+（含用户机器若宿主组件行为类似）封包产物的导入式 Loader 加载可能被跳过。
+候选根治方向：① bootstrap 自加载兜底（EP 存根检测 VA 未修补时走备用加载
+路径，需扩 stub 逻辑）；② 双通道加载（导入表 + 早期侧通道如 TLS 回调/
+AppInitEx 类机制评估，注意 Win11 加固约束见 §5.1）；③ 向 GitHub
+actions/runner-images 报告取证材料（WER + PID↔diag 关联）请求宿主侧排查。
 
 ### 5.2 Standalone VfsTest.exe 跑出大量 FAIL
 

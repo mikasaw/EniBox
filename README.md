@@ -95,7 +95,7 @@ EniBox/
 │       ├── include/         # Headers
 │       └── deps/MinHook/    # vendored MinHook (API hooking, includes the HDE disassembler)
 └── tests/
-    ├── EniBox.Tests/        # xUnit test project (177 tests)
+    ├── EniBox.Tests/        # xUnit test project (192 tests)
     │   ├── E2E/             # End-to-end tests (pack + run + VFS + registry + subprocess)
     │   ├── PackService/     # Pack service tests (mock + exception + input)
     │   ├── Unit/            # Model/VFS/compression/interop unit tests
@@ -134,16 +134,16 @@ Please read this before using the tool in anger:
 - **x64 only** — 32-bit PEs are explicitly rejected at pack time
 - **The VFS is read-only** — writes to VFS files are denied; if the packed program writes config/logs into "its own directory" at runtime, redirect them to a writable location via arguments
 - **Child inheritance boundaries** — system programs (cmd.exe, conhost.exe, anything under System32) are not injected and do not inherit the VFS; an injected child holds a read-only copy of the parent's VFS (it remains usable after the parent exits); grandchild inheritance is not supported yet
-- **Registry virtualization is experimental** — preset reads, subtree scoping, write isolation and persistence have E2E coverage; caveats: the sidecar is plaintext (no encryption), value/key deletion is not hooked (deletes do not remove persisted entries), concurrent instances of the same packed program use last-write-wins with no locking (prefer single instance, delete the sidecar to reset), and a failed sidecar flush is only logged to diagnostics, not reported to the application
+- **Registry virtualization is experimental** — preset reads, subtree scoping, write isolation, persistence and value/key deletion have E2E coverage; caveats: the sidecar is plaintext (no encryption), deleting a scope root is denied (it would un-virtualize the subtree), concurrent instances of the same packed program use last-write-wins with no locking (prefer single instance), and deleting the sidecar resets to the preset values — deleted preset values reappear; a failed sidecar flush is only logged to diagnostics, not reported to the application
 - **Limited compatibility validation** — regression currently targets Windows 11 (26200, Insider) x64; Windows 10 is a supported target but has limited coverage
 
-## Test Coverage (177 tests)
+## Test Coverage (192 tests)
 
 | Category | Count | Scope |
 |----------|:-----:|-------|
 | Unit tests | ~80 | VFS struct serialization, CRC32, models/config/error codes, stub machine code |
 | Integration tests | ~30 | VFS build, LZMA round-trip, PeTool P/Invoke, CLI arguments |
-| E2E tests | 28 | Pack pipeline, packed runtime, VFS file reads, loader extraction, special paths, registry virtualization & persistence |
+| E2E tests | 30 | Pack pipeline, packed runtime, VFS file reads, loader extraction, special paths, registry virtualization & persistence |
 | Boundary tests | 8 | Malformed PE inputs (truncated/corrupt/empty/random/SizeOfOptionalHeader=0) |
 | Code review tests | ~20 | Source file presence, function signatures, architecture detection logic |
 

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **注册表删除语义** — `RegDeleteValue`/`RegDeleteKey`/`RegDeleteTree`/`RegDeleteKeyEx` 全部挂钩（钩子 11→19）：删除跨启动持久（存储即真相）、删键有子键时返回 ACCESS_DENIED 与真实注册表一致、`RegDeleteTree` 删子键与值键本身保留、已开句柄按 `ERROR_KEY_DELETED` 拒绝（墓碑槽位实现）、**作用域根删除被拒绝**（防止子树退出虚拟化后写入逃逸到真实注册表）
+- **虚拟父句柄路径解析** — 以虚拟句柄为父句柄的 Open/Create/Delete 子键操作不再落穿透（BuildKeyPath 解析句柄指向的键路径）
+- **CLI 预置注册表值** — `--registry-value KEY|NAME|TYPE|DATA`（可重复；TYPE ∈ SZ|EXPAND_SZ|DWORD|BINARY，缺省 SZ），配合 `--registry-virtualization` 全 CLI 化封包；开关与预置值不匹配时双向告警
+
+### Fixed
+- **同键多条预置值静默丢失** — 序列化器曾把同键多值拆成独立键槽，读取只命中第一条（自注册表虚拟化引入即存在，验收代理复现）；现 C# 侧按 KeyPath 聚合、Loader 侧同路径条目合并双保险
+- **注册表值钩子并发窗口** — Query/Enum 虚拟分支改锁内读，SetValue/DeleteValue 墓碑守卫改锁内复查（删除 free 与无锁读的 UAF 窗口）
+- **GUI 单文件产物 `--cli` 路由失效**（v0.6.0 发布冒烟发现）— 路由开关被原样透传给参数解析器报「未知选项」，命中后剥离再解析；`--version` 现输出 `0.6.0+<commit>`
+
 ## [0.6.0] - 2026-09-16
 
 子进程 VFS 继承、注册表虚拟化 + 持久化完整落地；修复封包产物启动崩溃全链（8 条根因）。

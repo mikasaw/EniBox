@@ -50,12 +50,33 @@ EniBox.exe --cli --source <源EXE路径> --output <输出路径> [选项]
 
 ### `--registry-virtualization`
 
-- 预置值目前仅支持**编程 API**（`PackConfiguration.RegistryValues`，
-  见 `PackRegistryValue.FromString/FromDword`）；CLI 只打开/关闭开关。
 - 语义：预置键路径即作用域根，整个子树（含运行时新建键）全部虚拟化；
-  写入不触碰真实注册表，并持久化到产物同目录 `<产物>.vreg.bin`
-  （启动时存在则整体替换预置值；删除该文件即重置为预置值）；
-  作用域外的键完全透传。多实例并发为后写赢无锁，建议单实例运行。
+  写入/删除不触碰真实注册表，并持久化到产物同目录 `<产物>.vreg.bin`
+  （启动时存在则整体替换预置值；删除该文件即重置为预置值，
+  被删除的预置值会回来）；作用域外的键完全透传。
+  多实例并发为后写赢无锁，建议单实例运行。
+- 删除语义：`RegDeleteValue`/`RegDeleteKey`/`RegDeleteTree`/`RegDeleteKeyEx`
+  均已挂钩（删键有子键时返回 ACCESS_DENIED；`RegDeleteTree` 删子键与值、
+  键本身保留，与真实注册表一致；删除作用域根被拒绝——会使子树退出
+  虚拟化）。
+
+### `--registry-value`
+
+- 预置注册表值，可重复传入。格式：`KEY|NAME|TYPE|DATA` 或
+  `KEY|NAME|DATA`（TYPE 缺省 `SZ`）。
+- `TYPE ∈ {SZ, EXPAND_SZ, DWORD, BINARY}`；DWORD 为无符号十进制，
+  BINARY 为十六进制串（`DE AD BE EF` 或 `DEADBEEF`）；
+  `MULTI_SZ` 仅编程 API（`PackRegistryValue`）支持。
+- 限制：字段以 `|` 分隔，SZ/EXPAND_SZ 文本中无法包含 `|` 字符
+  （需要时请改用编程 API）。
+- 示例：
+
+```bash
+EniBox.exe --cli --source app.exe --output app.enibox \
+  --registry-virtualization \
+  --registry-value "HKEY_CURRENT_USER\Software\MyApp|InstallDir|SZ|C:\\Apps\\MyApp" \
+  --registry-value "HKEY_CURRENT_USER\Software\MyApp|LaunchCount|DWORD|0"
+```
 
 ### 退出码契约
 
