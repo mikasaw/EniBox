@@ -219,11 +219,18 @@ VMware Win10 x64 实机测试（vmrun 部署，宿主 Win11 26200 封包）：
   `System.AccessViolationException`（0xC0000005，托管栈完整：
   `at Program.ReadFile(IntPtr, Byte[], UInt32, UInt32 ByRef, IntPtr)`）。
 - 同一产物在宿主 Win11 26200 全功能正常（E2E 30/30）。
-- 定位：ReadFile 是 Loader 的 hook 目标（kernelbase!ReadFile inline hook）。
-  Win10 与 Win11 的函数序言机器码不同，MinHook trampoline 复制在 Win10
-  序言上失稳的假设优先——与 §5.1 D3「实例相关完整性指令」同族，属
-  Win10 变体。**修复需 Win10 专属跳板兼容性工作**（WinDbg 对 VM 内
-  kernelbase!ReadFile 反汇编比对 Win11），列为 Win10 支持的阻塞项。
+- 定位（2026-09-17 甄别实验收窄）：ReadFile 是 Loader 的 hook 目标
+  （kernelbase!ReadFile inline hook）。
+  **关键分界实验**：原生 C 的 VfsTest 封包产物在 Win10 上 **10/10 全过**
+  （CreateFile/Read/Seek/Attributes/安全加固），而自包含 .NET 产物在同机
+  ReadFile P/Invoke 处 AV——**钩子引擎在 Win10 完全正常，崩溃仅限
+  .NET P/Invoke 路径**。
+  序言静态对比（磁盘字节，两版 kernelbase.dll 导出表解析）：ReadFile/
+  CreateFileW/WriteFile 的 Win10/Win11 序言均为普通 mov/push/sub 序列，
+  无 rip 相对或跳板敌对指令——「trampoline 复制失败」的简单解释被削弱，
+  怀疑 .NET 运行时与 inline hook 的交互（如 P/Invoke 存根与 detour 的
+  栈/寄存器约定差异）。**下一步需 VM 内核态/用户态调试器**：WinDbg
+  KDNET 附着，AV 断点处核对故障指令与 trampoline 运行时字节。
 - 佐证：mingw 编译的 tar.exe 封包在 Win11 正常（其非 CFG/非 IPCFG 特性
   与本问题无关，Win10 上的表现待下轮补测）。
 - 测试通道坑：Win10 VM 无 .NET 运行时，框架依赖封装产物启动即报
