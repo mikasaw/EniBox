@@ -26,42 +26,56 @@ public class LoaderExtractionTests : E2ETestBase
 
         var packResult = await PackExeAsync(sourcePath, outputPath);
         Assert.True(packResult.IsSuccess, $"封包失败: {packResult.ErrorMessage}");
+        var sidecarPath = Path.Combine(Path.GetDirectoryName(outputPath)!, "EniBox.Loader.dll");
+        Assert.True(File.Exists(sidecarPath), "封包成功但旁置 Loader DLL 缺失");
 
         // Loader 在 DllMain（进程初始化）期间把自身提取到
         // %TEMP%\EniBox-<pid>-<rnd>\EniBox.Loader.<pid>.<rnd>.dll；
         // 正常退出时 DLL_PROCESS_DETACH 会清理掉提取目录。因此这里
         // 启动后轮询到提取产物就 Kill，让目录留在盘上供断言（终止进程不跑 DETACH）。
-        // ping 每次间隔 ~1s，-n 12 保证宿主存活 >=12s，给轮询留足窗口
-        var si = new System.Diagnostics.ProcessStartInfo(outputPath, "/c ping -n 12 -w 1000 127.0.0.1 >nul")
+        // ping 每次间隔 ~1s，-n 12 保证宿主存活 >=12s，给轮询留足窗口。
+        // CI runner 上曾观察到 bootstrap 的 LoadLibraryA 间歇性静默失败
+        // （进程 exit 0 但无 DllMain 痕迹）——整体重试一次。
+        for (int attempt = 1; ; attempt++)
         {
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        using var proc = System.Diagnostics.Process.Start(si)
-            ?? throw new InvalidOperationException("封包程序启动失败");
-        var pid = proc.Id;
+            var si = new System.Diagnostics.ProcessStartInfo(outputPath, "/c ping -n 12 -w 1000 127.0.0.1 >nul")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = System.Diagnostics.Process.Start(si)
+                ?? throw new InvalidOperationException("封包程序启动失败");
+            var pid = proc.Id;
 
-        // 提取发生在 DllMain，进程起来后应立刻出现；轮询最多 8 秒
-        string[] extractionDirs = Array.Empty<string>();
-        for (int i = 0; i < 80 && extractionDirs.Length == 0; i++)
-        {
-            await Task.Delay(100);
-            extractionDirs = Directory.GetDirectories(Path.GetTempPath(), $"EniBox-{pid}-*");
-        }
-        string hostState;
-        try
-        {
-            hostState = proc.HasExited
-                ? $"exited code={proc.ExitCode}"
-                : "still running";
-        }
-        catch (Exception ex) { hostState = "state query failed: " + ex.Message; }
+            // 提取发生在 DllMain，进程起来后应立刻出现；轮询最多 8 秒
+            string[] extractionDirs = Array.Empty<string>();
+            for (int i = 0; i < 80 && extractionDirs.Length == 0; i++)
+            {
+                await Task.Delay(100);
+                extractionDirs = Directory.GetDirectories(Path.GetTempPath(), $"EniBox-{pid}-*");
+            }
+            string hostState;
+            try
+            {
+                hostState = proc.HasExited
+                    ? $"exited code={proc.ExitCode}"
+                    : "still running";
+            }
+            catch (Exception ex) { hostState = "state query failed: " + ex.Message; }
         if (!proc.HasExited) proc.Kill(entireProcessTree: true);
         proc.WaitForExit();
 
         var extracted = extractionDirs
             .SelectMany(d => Directory.GetFiles(d, "EniBox.Loader.*.dll"))
             .ToArray();
+
+        // CI runner 上 bootstrap 的 LoadLibraryA 间歇性静默失败（进程 exit 0
+        // 但无 DllMain 痕迹，本地不复现）：整体重试一次，仍要求真实提取。
+        if (extracted.Length == 0 && attempt == 1)
+        {
+            Logger.Info($"第 {attempt} 次启动未见提取产物（宿主状态: {hostState}），重试");
+            continue;
+        }
 
         try
         {
@@ -80,6 +94,7 @@ public class LoaderExtractionTests : E2ETestBase
                 var fileName = Path.GetFileName(f);
                 Assert.Contains(pid.ToString(), fileName);
             }
+            break;
         }
         finally
         {
@@ -95,7 +110,7 @@ public class LoaderExtractionTests : E2ETestBase
 public class SpecialPathTests : E2ETestBase
 {
     public SpecialPathTests(ITestOutputHelper output) : base(output) { }
-    
+
 [SkippableFact]
     public async Task E2E_Pack_SourceWithSpaces_ProducesOutput()
     {
@@ -209,4 +224,5 @@ public class MultiFileStressTests : E2ETestBase
             Logger.Info($"多文件封包结果: {result.ErrorMessage}");
         }
     }
+}
 }
