@@ -108,6 +108,15 @@ jobs:
           } else {
             Write-Host "no EniBox_diag files"
           }
+          # 0xC0000005 等运行期崩溃取证：Application 事件日志直接给出故障模块名
+          $errs = Get-WinEvent -FilterHashtable @{ LogName='Application'; Id=1000; StartTime=(Get-Date).AddMinutes(-30) } `
+                    -ErrorAction SilentlyContinue | Where-Object { $_.Message -match '0xc0000005|0xC0000005' }
+          if ($errs) {
+            Write-Host "=== WER Application Error (最近30分钟) ==="
+            foreach ($e in $errs) { Write-Host ($e.Message -split "`n" | Select-Object -First 6) }
+          } else {
+            Write-Host "no WER app-crash events"
+          }
       - name: 上传 TRX 报告 (失败时)
         if: failure()
         uses: actions/upload-artifact@v4
