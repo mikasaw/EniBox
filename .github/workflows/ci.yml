@@ -60,8 +60,11 @@ jobs:
           dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release -r win-x64 --no-restore --nologo -v:minimal
           dotnet build tests/EniBox.Tests/EniBox.Tests.csproj -c Release -r win-x64 --no-restore --nologo -v:minimal
       # -r 构建的输出在 win-x64 子目录，--no-build 会找不到测试程序集；
-      # 让 dotnet test 自带构建以保持 RID 一致
-      - run: dotnet test tests/EniBox.Tests/EniBox.Tests.csproj -c Release -r win-x64 --logger "console;verbosity=detailed"
+      # 让 dotnet test 自带构建以保持 RID 一致。
+      # 职责拆分：本 job 只跑托管测试（单元/集成/边界）；E2E（含封包产物运行）
+      # 由 e2e-verify 专管——两 job 重复跑 E2E 会双倍暴露于 §5.1.6 的
+      # runner 宿主机封包产物启动崩溃问题（无覆盖增益）。
+      - run: dotnet test tests/EniBox.Tests/EniBox.Tests.csproj -c Release -r win-x64 --logger "console;verbosity=detailed" --filter "FullyQualifiedName!~E2E"
       - name: WER Application Error 取证（封包产物 0xC0000005 故障模块）
         if: failure()
         shell: pwsh
