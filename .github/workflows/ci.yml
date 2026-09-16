@@ -38,10 +38,9 @@ jobs:
 
   dotnet-test:
     needs: [dotnet-build, msvc-build]
-    # 2026-09-16: windows-latest(2025-vs2026 镜像) 部分宿主机上封包产物启动即
-    # 0xC0000005（WER 取证 faulting module=unknown），同内容逐轮一绿一红；
-    # 测试 job 固定到 windows-2022 采样对比（B-2 治理，RUNBOOK §5.1.6）
-    runs-on: windows-2022
+    # 2026-09-16 采样结论：windows-2022 3败/1过，不优于 windows-latest，回退。
+    # 崩溃根因与镜像代无关（见 RUNBOOK §5.1.6：导入表被宿主加载器跳过，Loader 未附着）
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -78,8 +77,8 @@ jobs:
 
   e2e-verify:
     needs: [dotnet-build, msvc-build]
-    # 同 dotnet-test：测试 job 固定 windows-2022 采样（B-2）
-    runs-on: windows-2022
+    # 同 dotnet-test：windows-2022 采样无收益，回退 windows-latest（RUNBOOK §5.1.6）
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
