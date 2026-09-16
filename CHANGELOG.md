@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-16
+
+子进程 VFS 继承、注册表虚拟化 + 持久化完整落地；修复封包产物启动崩溃全链（8 条根因）。
+
+### Added
+- **子进程 VFS 继承（实验性）** — 封包程序启动的非封包子进程自动注入 Loader 并经 VfsLink 握手继承父 VFS 视图；系统程序跳过名单（cmd.exe/conhost/System32 等）不注入；封包子进程跳过注入防同名模块遮蔽；A/W 双族 E2E 覆盖
+- **注册表虚拟化（实验性）+ 持久化** — 封包时预置键值（编程 API）；作用域 = 前缀子树规则（预置键路径即作用域根，含运行时 `RegCreateKeyEx` 新建键，注册表钩子 9→11）；写入不触碰真实注册表并持久化到产物同目录 `<产物>.vreg.bin`（CRC 校验、后写赢无锁、删除即重置为预置值）；继承子进程经父镜像路径读写同一份 sidecar；E2E 覆盖 写→重启读回→删档重置→真实注册表零写入
+- **封包配置开关** — .enibox 节 [272..275] 配置位（bit0 子进程注入、bit1 注册表虚拟化），CLI `--subprocess-injection` / `--registry-virtualization` 显式控制，Loader 按位门控
+- **Loader 磁盘优先选取** — `Resources\EniBox.Loader.<arch>.dll` → 同目录 → 通用名，MZ/PE 架构校验，CLI 进度输出打印 SHA256 指纹前 16 位
+- **CI/CD** — GitHub Actions 五 job 流水线（msvc / dotnet-build / dotnet-test / cli-mode-build / e2e-verify）全绿；`w-inject-debug` 手动诊断工作流；E2E 验证脚本 `verify-e2e.ps1` 集成
+- **全局异常兜底** — GUI 三级异常钩子 + CLI 兜底 catch，写 `%LOCALAPPDATA%\EniBox\logs\` 文件日志，CLI 返回非零退出码
+- E2E 用例 27→28（子进程继承、注册表预置、注册表持久化往返）；SubProcHost/DbWinSniffer 测试助手重写为原生 C（.NET 版易被杀软隔离）
+
+### Fixed
+- **封包产物启动崩溃全链（8 条根因，tests/E2E-RUNBOOK.md §5.1 存档）** — 旁置 Loader DLL 从不落地、入口点所在节不可执行（0xC0000040→0xE0000040）、VFS 头 DataOffset 恒 0、盘根路径 DirIndex 失配、陈旧嵌入 Loader（上游 MinHook 替换）、CombineSectionData 流位置错位、W 族子进程注入 detour 未接线、预定义根键句柄符号扩展失配（SDK 常量 vs 应用零扩展，致注册表虚拟化对真实应用永不命中）
+- `--compress` 参数被静默忽略（bool 绑定错误），现支持 on|off|true|false|yes|no|1|0
+- CLI 缺失 `--files`/`--dirs` 路径时报错退出（退出码契约 0/1/2），不再静默成功
+
+### Changed
+- **破坏性变更：VFS blob 格式 v2** — header 44→52 字节（追加 RegistryOffset/RegistrySize），尾部新增 'EREG' 注册表预置区并计入 CRC；v1 旧封包产物不被新 Loader 接受，需用新版本重新封包
+- 测试总数 176→177，E2E 27→28
+
 ## [0.5.1] - 2026-06-24
 
 ### Fixed
