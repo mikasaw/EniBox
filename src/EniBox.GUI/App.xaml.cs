@@ -61,7 +61,9 @@ namespace EniBox.GUI
                 AttachConsole(ATTACH_PARENT_PROCESS);
 
                 var cli = new Services.CliRunner(Services);
-                int exitCode = cli.Run(e.Args);
+                // --cli 只是路由开关，不透传给 System.CommandLine（否则报未知选项并打印帮助）
+                var cliArgs = Array.FindAll(e.Args, a => a != "--cli");
+                int exitCode = cli.Run(cliArgs);
                 Shutdown(exitCode);
                 return;
             }
