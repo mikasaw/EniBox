@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -10,19 +11,33 @@ public abstract class VerificationTestBase : IDisposable
     protected ITestOutputHelper Output { get; }
     protected string TestTempDir { get; }
     protected TestLogger Logger { get; }
-    
+
     protected VerificationTestBase(ITestOutputHelper output)
     {
         Output = output ?? throw new ArgumentNullException(nameof(output));
         Logger = new TestLogger(output);
-        
+
         TestTempDir = Path.Combine(
             Path.GetTempPath(),
             "EniBox_VerificationTests",
             Guid.NewGuid().ToString("N")
         );
-        
-        Directory.CreateDirectory(TestTempDir);
+
+        // 并行测试下 %TEMP% 存在瞬时竞争窗口（其它进程清理/占用），
+        // CreateDirectory 偶发 DirectoryNotFoundException/IOException——重试兜底
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Directory.CreateDirectory(TestTempDir);
+                break;
+            }
+            catch (Exception ex) when (attempt < 4 &&
+                (ex is DirectoryNotFoundException || ex is IOException))
+            {
+                Thread.Sleep(50 * attempt);
+            }
+        }
         Logger.Info($"测试临时目录: {TestTempDir}");
     }
     
