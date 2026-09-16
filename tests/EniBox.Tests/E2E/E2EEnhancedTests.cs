@@ -31,7 +31,8 @@ public class LoaderExtractionTests : E2ETestBase
         // %TEMP%\EniBox-<pid>-<rnd>\EniBox.Loader.<pid>.<rnd>.dll；
         // 正常退出时 DLL_PROCESS_DETACH 会清理掉提取目录。因此这里
         // 启动后轮询到提取产物就 Kill，让目录留在盘上供断言（终止进程不跑 DETACH）。
-        var si = new System.Diagnostics.ProcessStartInfo(outputPath, "/c ping -n 6 127.0.0.1 >nul")
+        // ping 每次间隔 ~1s，-n 12 保证宿主存活 >=12s，给轮询留足窗口
+        var si = new System.Diagnostics.ProcessStartInfo(outputPath, "/c ping -n 12 -w 1000 127.0.0.1 >nul")
         {
             UseShellExecute = false,
             CreateNoWindow = true
