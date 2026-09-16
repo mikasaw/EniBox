@@ -56,8 +56,12 @@ public class LoaderExtractionTests : E2ETestBase
 
         try
         {
+            var diagDump = string.Join(" | ",
+                Directory.GetFiles(Path.GetTempPath(), "EniBox_diag_*.log")
+                    .Select(f => File.ReadAllText(f).Trim())
+                    .DefaultIfEmpty("(无诊断文件)"));
             Assert.True(extracted.Length > 0,
-                $"未在 %TEMP%\\EniBox-{pid}-*\\ 下找到提取的 Loader DLL（提取失败或命名不符）");
+                $"未在 %TEMP%\\EniBox-{pid}-*\\ 下找到提取的 Loader DLL（提取失败或命名不符）。Loader 诊断: {diagDump}");
 
             foreach (var f in extracted)
             {

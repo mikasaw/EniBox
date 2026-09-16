@@ -326,6 +326,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         GetModuleFileNameW(hModule, g_loader_path, MAX_PATH);
         HookProcess_SetLoaderPath(g_loader_path);
 
+        EniBox_DiagLine("dllmain attach");
         uint32_t section_size = 0;
         uint8_t* section_base = FindEniboxSection(&section_size);
         if (section_base) {
@@ -421,7 +422,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 /* Initialize VFS + hooks */
                 uint32_t vfs_end_offset = vfs_data_offset + vfs_total_size;
                 if (vfs_total_size > 0 && vfs_end_offset <= section_size) {
-                    Loader_Initialize(section_base + vfs_data_offset, vfs_total_size);
+                    int32_t init_rc = Loader_Initialize(section_base + vfs_data_offset, vfs_total_size);
+                    if (init_rc != 0) {
+                        char d[64];
+                        sprintf_s(d, sizeof(d), "init rc=%d", init_rc);
+                        EniBox_DiagLine(d);
+                    }
                 }
 
                 /* Extract embedded Loader DLL for child process injection.
@@ -433,6 +439,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     loader_total_size <= section_size - vfs_end_offset) {
                     uint8_t* loader_data = section_base + vfs_end_offset;
                     if (ExtractEmbeddedLoader(loader_data, loader_total_size)) {
+                        EniBox_DiagLine("extract ok");
                         /* Use the extracted path for child process injection
                          * instead of the currently loaded DLL's path.
                          * This ensures child processes get the correct Loader
