@@ -364,31 +364,53 @@ namespace EniBox.GUI.Services
         ///   uint32 magic 'EREG'；uint32 count；
         ///   每项: uint32 keyChars, key(UTF-16LE), uint32 valueCount,
         ///         每值: uint32 nameChars, name(UTF-16LE), uint32 type, uint32 dataBytes, data
+        /// 同一 KeyPath 的多条值必须聚合到一个条目（valueCount>1）——loader 侧
+        /// 每条目建独立键槽且不合并同路径，拆开写会导致第二条起不可达。
         /// </summary>
         private static byte[] SerializeRegistryRegion(List<PackRegistryValue> values)
         {
             if (values.Count == 0)
                 return Array.Empty<byte>();
 
+            // 按 KeyPath 分组（保持首次出现顺序），同键多值聚合
+            var grouped = new List<(string Key, List<PackRegistryValue> Items)>();
+            var indexByKey = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var v in values)
+            {
+                var key = v.KeyPath ?? string.Empty;
+                if (!indexByKey.TryGetValue(key, out var gi))
+                {
+                    grouped.Add((key, new List<PackRegistryValue> { v }));
+                    indexByKey[key] = grouped.Count - 1;
+                }
+                else
+                {
+                    grouped[gi].Items.Add(v);
+                }
+            }
+
             using var ms = new MemoryStream();
             using var writer = new BinaryWriter(ms);
 
             writer.Write(0x47455245u); // 'EREG'
-            writer.Write((uint)values.Count);
-            foreach (var v in values)
+            writer.Write((uint)grouped.Count);
+            foreach (var (_, items) in grouped)
             {
-                var keyBytes = Encoding.Unicode.GetBytes(v.KeyPath ?? string.Empty);
+                var keyBytes = Encoding.Unicode.GetBytes(items[0].KeyPath ?? string.Empty);
                 writer.Write((uint)(keyBytes.Length / 2));
                 writer.Write(keyBytes);
 
-                var nameBytes = Encoding.Unicode.GetBytes(v.ValueName ?? string.Empty);
-                writer.Write(1u); // 每条目单值
-                writer.Write((uint)(nameBytes.Length / 2));
-                writer.Write(nameBytes);
-                writer.Write(v.Type);
-                writer.Write((uint)(v.Data?.Length ?? 0));
-                if (v.Data != null && v.Data.Length > 0)
-                    writer.Write(v.Data);
+                writer.Write((uint)items.Count);
+                foreach (var v in items)
+                {
+                    var nameBytes = Encoding.Unicode.GetBytes(v.ValueName ?? string.Empty);
+                    writer.Write((uint)(nameBytes.Length / 2));
+                    writer.Write(nameBytes);
+                    writer.Write(v.Type);
+                    writer.Write((uint)(v.Data?.Length ?? 0));
+                    if (v.Data != null && v.Data.Length > 0)
+                        writer.Write(v.Data);
+                }
             }
             return ms.ToArray();
         }
