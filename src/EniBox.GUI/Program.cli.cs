@@ -29,6 +29,7 @@ namespace EniBox.GUI
                     Console.WriteLine("  --dirs <list>                Semicolon-separated list of dependency directories");
                     Console.WriteLine("  --compress <on|off>          Enable compression (default: on)");
                     Console.WriteLine("  --registry-virtualization    Enable registry virtualization (default: off)");
+                    Console.WriteLine("  --registry-value <spec>      Preset registry value, repeatable: KEY|NAME|TYPE|DATA (TYPE: SZ|EXPAND_SZ|DWORD|BINARY, default SZ)");
                     Console.WriteLine("  --subprocess-injection       Enable subprocess injection (default: on)");
                     Console.WriteLine("  --help, -h                   Show this help message");
                     return 0;

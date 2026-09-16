@@ -29,11 +29,18 @@ namespace EniBox.GUI.Services
             var compressOption = new Option<string>("--compress", () => "on", "Enable compression: on|off (default on)");
             var regVirtOption = new Option<bool>("--registry-virtualization", () => false, "Enable registry virtualization");
             var subProcOption = new Option<bool>("--subprocess-injection", () => true, "Enable subprocess injection");
+            // 预置注册表值，可重复：KEY|NAME|TYPE|DATA 或 KEY|NAME|DATA（TYPE 缺省 SZ）
+            // TYPE ∈ {SZ, EXPAND_SZ, DWORD, BINARY}，详见 PackRegistryValue.FromSpec
+            var regValueOption = new Option<string[]>("--registry-value",
+                "Preset registry value, repeatable: KEY|NAME|TYPE|DATA or KEY|NAME|DATA (SZ default); TYPE: SZ|EXPAND_SZ|DWORD|BINARY")
+            {
+                AllowMultipleArgumentsPerToken = false
+            };
 
             var rootCommand = new RootCommand("EniBox - Virtual File Box Packer")
             {
                 sourceOption, outputOption, filesOption, dirsOption,
-                compressOption, regVirtOption, subProcOption
+                compressOption, regVirtOption, subProcOption, regValueOption
             };
 
             rootCommand.SetHandler(async (context) =>
@@ -45,6 +52,7 @@ namespace EniBox.GUI.Services
                 var compressRaw = context.ParseResult.GetValueForOption(compressOption) ?? "on";
                 var regVirt = context.ParseResult.GetValueForOption(regVirtOption);
                 var subProc = context.ParseResult.GetValueForOption(subProcOption);
+                var regValueSpecs = context.ParseResult.GetValueForOption(regValueOption) ?? Array.Empty<string>();
 
                 if (!TryParseOnOff(compressRaw, out var compress))
                 {
@@ -60,6 +68,30 @@ namespace EniBox.GUI.Services
                     EnableRegistryVirtualization = regVirt,
                     EnableSubProcessInjection = subProc
                 };
+
+                // 预置注册表值：解析失败属使用错误，报错退出而非静默丢值
+                foreach (var spec in regValueSpecs)
+                {
+                    try
+                    {
+                        config.RegistryValues.Add(PackRegistryValue.FromSpec(spec));
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        Console.Error.WriteLine($"Error: --registry-value '{spec}': {ex.Message}");
+                        context.ExitCode = 1;
+                        return;
+                    }
+                }
+
+                if (regVirt && config.RegistryValues.Count == 0)
+                {
+                    Console.Error.WriteLine("Warning: --registry-virtualization 已启用但无 --registry-value 预置值：无作用域声明，虚拟化为空操作");
+                }
+                if (!regVirt && config.RegistryValues.Count > 0)
+                {
+                    Console.Error.WriteLine("Warning: 已提供 --registry-value 但未启用 --registry-virtualization：预置值不会写入产物（PackService 仅在开关开启时消费）");
+                }
 
                 // Add files — 不存在的路径是使用错误，必须报错退出而非静默跳过
                 //（静默跳过会产出一个"内容比预期少"的包且退出码为 0）
