@@ -38,10 +38,21 @@ int32_t HookRegistry_Install(void);
 int32_t VReg_Initialize(void);
 void VReg_Finalize(void);
 
-/* 从 VFS blob v2 的 'EREG' 注册表预置区填充虚拟注册表（只读预置值；
- * 对虚拟句柄的写入仅存在于本进程内存）。格式契约见 C# 侧
+/* 从 VFS blob v2 的 'EREG' 注册表预置区填充虚拟注册表（预置语义见下方
+ * sidecar 说明：仅 sidecar 缺失/损坏时作为首启数据）。格式契约见 C# 侧
  * VfsBuilder.SerializeRegistryRegion，两端必须同步。 */
 int32_t VReg_Preload(const uint8_t* blob, uint32_t size);
+
+/* 持久化 sidecar（<封包产物路径>.vreg.bin）。启用注册表虚拟化时：
+ *   - 作用域 = 前缀子树规则，作用域根即预置键路径，子树内运行时新建键/写值
+ *     均进入虚拟存储；
+ *   - 对虚拟键的每次建键/写值后整库落盘（后写赢，无锁；并发实例后写覆盖先写）；
+ *   - 启动时若 sidecar 存在且校验通过，则整体替换预置值（持久化优先，
+ *     预置仅首次初始化生效）；sidecar 缺失/损坏时回退预置值；
+ *   - 删除 sidecar 文件即重置为预置值。 */
+void VReg_SetSidecarPathW(const wchar_t* path);
+BOOL VReg_LoadSidecar(void);
+BOOL VReg_SaveSidecar(void);
 
 /* Check if a registry path is virtualized */
 BOOL VReg_IsVirtualKeyA(const char* path);

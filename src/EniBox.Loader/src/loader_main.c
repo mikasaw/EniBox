@@ -20,6 +20,9 @@ static wchar_t g_loader_path[MAX_PATH] = {0};
 static wchar_t g_extracted_loader_path[MAX_PATH] = {0};
 static wchar_t g_extracted_loader_dir[MAX_PATH] = {0};
 static BOOL g_loader_extracted = FALSE;
+/* 注册表持久化 sidecar 路径由继承路径（父镜像）预设时为 TRUE，
+ * Loader_Initialize 不再用宿主自身路径覆盖 */
+static BOOL g_vreg_sidecar_from_parent = FALSE;
 
 static uint32_t ComputeCrc32(const uint8_t* data, uint32_t size) {
     uint32_t crc = 0xFFFFFFFF;
@@ -177,10 +180,24 @@ __declspec(dllexport) int32_t __stdcall EniBoxLoader_GetVersion(void)
 int32_t Loader_Initialize(uint8_t* vfs_base, uint32_t vfs_size) {    if (g_initialized) return 0;
     int32_t result = VFS_Initialize(vfs_base, vfs_size);
     if (result != 0) return result;
-    /* v2 header: 预载注册表虚拟化预置值（仅启用注册表虚拟化时） */
+    /* v2 header: 注册表虚拟化（仅启用时）。持久化优先：sidecar 存在且校验
+     * 通过则整体替换预置值（预置仅首启生效）；缺失/损坏回退预置值。 */
     if ((g_config_flags & ENIBOX_FLAG_REGISTRY_VIRTUALIZATION) && vfs_size >= 52) {
         uint32_t version = *(uint32_t*)(vfs_base + 4);
-        if (version >= 2) {
+        /* 注册表持久化 sidecar：<封包产物路径>.vreg.bin（继承子进程已预设为
+         * 父镜像路径，保证父子读写同一份）。删除该文件即重置为预置值。 */
+        if (!g_vreg_sidecar_from_parent) {
+            wchar_t exePath[1024];
+            uint32_t n = GetModuleFileNameW(NULL, exePath, 1024);
+            if (n > 0 && n < 1024) {
+                wchar_t sidecarPath[1024];
+                if (_snwprintf_s(sidecarPath, 1024, _TRUNCATE,
+                                 L"%s.vreg.bin", exePath) > 0) {
+                    VReg_SetSidecarPathW(sidecarPath);
+                }
+            }
+        }
+        if (!VReg_LoadSidecar() && version >= 2) {
             uint32_t regOff = *(uint32_t*)(vfs_base + 44);
             uint32_t regSize = *(uint32_t*)(vfs_base + 48);
             if (regOff < vfs_size && regSize > 0 && regOff <= vfs_size - regSize) {
@@ -264,6 +281,16 @@ static void Loader_TryInheritParentVfs(HMODULE hModule) {
     }
     CloseHandle(h);
     if (!ok) { VfsInherit_Diag("link_read_failed"); return; }
+
+    /* 注册表持久化 sidecar 跟随父镜像（封包产物）路径，父子进程读写同一份 */
+    {
+        wchar_t sidecarPath[1024];
+        if (_snwprintf_s(sidecarPath, 1024, _TRUNCATE,
+                         L"%s.vreg.bin", image) > 0) {
+            VReg_SetSidecarPathW(sidecarPath);
+            g_vreg_sidecar_from_parent = TRUE;
+        }
+    }
 
     HANDLE hFile = CreateFileW(image, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
                                NULL, OPEN_EXISTING, 0, NULL);
