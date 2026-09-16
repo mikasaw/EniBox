@@ -211,6 +211,27 @@ B-4 补充（2026-09-16）：
   `mingw64\bin\git.exe`（连同其 DLL 依赖）并保持便携布局。
 - 更多应用（写配置类、插件目录类）待补。
 
+### 5.1.7 Win10 回归首测：封包 .NET 程序在 ReadFile P/Invoke 处崩溃（2026-09-17，开放问题）
+
+VMware Win10 x64 实机测试（vmrun 部署，宿主 Win11 26200 封包）：
+
+- 自包含 .NET 8 FileChecker 封包产物在 Win10 启动到 ReadFile P/Invoke 时
+  `System.AccessViolationException`（0xC0000005，托管栈完整：
+  `at Program.ReadFile(IntPtr, Byte[], UInt32, UInt32 ByRef, IntPtr)`）。
+- 同一产物在宿主 Win11 26200 全功能正常（E2E 30/30）。
+- 定位：ReadFile 是 Loader 的 hook 目标（kernelbase!ReadFile inline hook）。
+  Win10 与 Win11 的函数序言机器码不同，MinHook trampoline 复制在 Win10
+  序言上失稳的假设优先——与 §5.1 D3「实例相关完整性指令」同族，属
+  Win10 变体。**修复需 Win10 专属跳板兼容性工作**（WinDbg 对 VM 内
+  kernelbase!ReadFile 反汇编比对 Win11），列为 Win10 支持的阻塞项。
+- 佐证：mingw 编译的 tar.exe 封包在 Win11 正常（其非 CFG/非 IPCFG 特性
+  与本问题无关，Win10 上的表现待下轮补测）。
+- 测试通道坑：Win10 VM 无 .NET 运行时，框架依赖封装产物启动即报
+  "You must install .NET"——Win10 冒烟必须用自包含发布。
+
+前置同节（2026-09-16 B-4）：certutil 崩溃已修复（GFIDS 登记，见 git
+d2627e9）；tar 反斜杠路径差异为 bsdtar 自身行为。
+
 ### 5.1.4 并行全量 0xC0000005 取证结论（2026-09-16，T-C 时间盒）
 
 曾观察到并行全量下封包产物退出码 0xC0000005 一次。配置 WER LocalDumps
