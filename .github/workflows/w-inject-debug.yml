@@ -1,0 +1,63 @@
+name: w-inject-debug
+
+# §5.1.5 取证用：在 runner 上反复运行 ChildInheritsParentVfs，
+# 复现 W 族注入失效并转储 Loader 诊断文件（%TEMP%\EniBox_diag_*.log）。
+# 手动触发：gh workflow run w-inject-debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  reproduce:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.x'
+      - uses: microsoft/setup-msbuild@v2
+      - name: 关闭 runner 实时防护
+        run: Set-MpPreference -DisableRealtimeMonitoring $true -Force
+      - name: 编译 native DLLs
+        run: |
+          msbuild src/EniBox.PeTool/EniBox.PeTool.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
+          msbuild src/EniBox.Loader/EniBox.Loader.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:WindowsTargetPlatformVersion=10.0 /p:TreatWarningsAsErrors=true
+      - name: 编译 Tests
+        run: |
+          dotnet build src/EniBox.GUI/EniBox.GUI.csproj -c Release -r win-x64 --no-restore --nologo -v:minimal
+          dotnet build tests/EniBox.Tests/EniBox.Tests.csproj -c Release -r win-x64 --no-restore --nologo -v:minimal
+      - name: 构建测试辅助程序
+        shell: pwsh
+        run: |
+          dotnet publish tests/TestHelpers/FileChecker/FileChecker.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true --nologo -o tests/TestHelpers/FileChecker/publish
+          dotnet publish tests/TestHelpers/SubProcChild/SubProcChild.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true --nologo -o tests/TestHelpers/SubProcChild/publish
+      - name: 循环复现 W 族注入（10 轮）
+        shell: pwsh
+        run: |
+          $failures = 0
+          for ($i = 1; $i -le 10; $i++) {
+            Write-Host "=== iteration $i ==="
+            dotnet test tests/EniBox.Tests/EniBox.Tests.csproj -c Release -r win-x64 --no-build `
+              --filter "FullyQualifiedName~ChildInheritsParentVfs" --logger "console;verbosity=detailed" 2>&1 | Tee-Object -FilePath "iteration_$i.log"
+            if ($LASTEXITCODE -ne 0) { $failures++ }
+          }
+          Write-Host "=== failures: $failures / 10 ==="
+          "FAILURES=$failures" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: 转储 Loader 诊断文件
+        if: always()
+        shell: pwsh
+        run: |
+          $logs = Get-ChildItem "$env:TEMP\EniBox_diag_*.log" -ErrorAction SilentlyContinue
+          if ($logs) {
+            foreach ($l in $logs) {
+              Write-Host "=== $($l.Name) (last write $($l.LastWriteTime)) ==="
+              Get-Content $l.FullName | ForEach-Object { Write-Host "  $_" }
+            }
+          } else { Write-Host "no EniBox_diag files" }
+      - name: 上传运行日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: w-inject-debug-logs
+          path: iteration_*.log
+          if-no-files-found: warn
