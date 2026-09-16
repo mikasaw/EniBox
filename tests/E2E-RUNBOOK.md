@@ -196,7 +196,7 @@ CI（GitHub Actions Windows runner）默认无实时防护隔离此类文件，�
 | curl.exe (System32) | 8.21.0 | `--version` / `--help` / `curl -o <file> file:///<file>` 真实下载落盘 | 全部 ✓，版本横幅与原生逐字节一致，下载文件内容正确 |
 | git.exe (mingw64/bin 主二进制 + 全套 DLL 便携布局) | 2.55.0.windows.3 | `--version` / 真实仓库内 `status --short` | ✓ 版本一致；仓库内枚举语义正确（干净树输出为空，非仓库目录报 not a git repository） |
 | tar.exe (System32, bsdtar/libarchive) | 3.8.8 | 封包 + VFS 提供 data.tar.gz，`-tf <归档>` 列表（B-4，2026-09-16） | ✓ 相对路径与正斜杠绝对路径均正确列出归档成员 |
-| certutil.exe (System32) | 10.0.26200 | `-hashfile <VFS文件> MD5`（B-4，2026-09-16） | ✗ 带参执行段错误（0xC0000005）；无参 usage 输出 `(null)` 异常。**Loader 正常 attach（diag 实证）**——与 §5.1.6 导入跳过不同源，疑 PeTool 对该 PE 形态（TLS/节布局/导入规模）修改致损，待专项定位 |
+| certutil.exe (System32) | 10.0.26200 | `-hashfile <VFS文件> MD5`（B-4，2026-09-16；2026-09-17 修复） | ✓ MD5 与原生一致（VFS 拦截正确）。**根因**：certutil 为 MSVC/CFG 编译，PeTool 旧做法清除 GUARD_CF 标志导致加载器跳过 CFG 位图初始化，而代码内 `_guard_dispatch_icall` 仍在——首个间接调用跳入 .data（0xC0000005，cdb 实证 RIP 落 .data 且无栈）。**修复**：保持 GUARD_CF 并把新入口点登记进 GFIDS 表（表重建于 .enibox 尾部；条目为 4 字节 RVA + GuardFlags 高位步进元数据，certutil 实测 extra=0 纯 4 字节步进）。残留已知项：`-?` 帮助描述串为 (null)（资源串加载问题，核心功能不受影响，待查） |
 
 B-4 补充（2026-09-16）：
 - tar 反斜杠绝对路径开档失败的鉴别：经 cmd.exe（排除 MSYS 参数转换）仍失败，

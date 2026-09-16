@@ -5,6 +5,8 @@
 #include <string.h>
 #include <stdio.h>
 
+static int32_t PE_ModGuardCFRegister(PE_CONTEXT* ctx, uint32_t new_ep_rva);
+
 static uint32_t AlignUp(uint32_t value, uint32_t alignment)
 {
     if (alignment == 0) return value;
@@ -131,14 +133,146 @@ int32_t PE_ModAddSection(PE_CONTEXT* ctx, const char* name,
             /* Patch the bootstrap's final `jmp` target: exe base + (section rva + stub offset). */
             *(uint32_t*)(ctx->new_section_data + 167) = new_section_rva + stubOff;
             PE_ModSetEntryPoint(ctx, new_section_rva);
+            /* CFG 加固镜像（MSVC 系统二进制等）：保持 GUARD_CF 并把新入口点
+             * 登记进 GFIDS 表。旧做法清 0x4000 标志会让加载器跳过 CFG 位图
+             * 初始化，而镜像代码里的 _guard_dispatch_icall 间接调用仍在——
+             * 首个间接调用即跳到非法地址（certutil.exe 崩溃实证）。 */
             if (ctx->is_64bit) {
-                ((IMAGE_NT_HEADERS64*)nt)->OptionalHeader.DllCharacteristics &= ~0x4000; /* IMAGE_DLLCHARACTERISTICS_GUARD_CF */
+                int32_t guardErr = PE_ModGuardCFRegister(ctx, new_section_rva);
+                if (guardErr != 0)
+                    return guardErr;
             } else {
                 ((IMAGE_NT_HEADERS32*)nt)->OptionalHeader.DllCharacteristics &= ~0x4000;
             }
         }
     }
 
+    ctx->modified = TRUE;
+    return PE_SUCCESS;
+}
+
+/*
+ * PE_ModGuardCFRegister - Register the new .enibox entry point in the CFG
+ * Guard Function ID (GFIDS) table so IMAGE_DLLCHARACTERISTICS_GUARD_CF can
+ * stay SET on packed images.
+ *
+ * Why not clear GUARD_CF: MSVC/CFG-built binaries route every indirect call
+ * through _guard_dispatch_icall, which consults the validity bitmap the
+ * LOADER initializes only when GUARD_CF is set. Clearing the flag leaves
+ * that machinery uninitialized — the first indirect call of certutil.exe
+ * jumped into .data and faulted (0xC0000005, B-4 2026-09-16). Keeping the
+ * flag and adding our bootstrap EP to GFIDS keeps both the loader's entry
+ * check and every indirect-call validation working unchanged.
+ *
+ * The rebuilt table lives at the tail of the .enibox section (the original
+ * .rdata table is sized exactly and cannot grow). Entries preserve the
+ * original per-entry metadata stride encoded in GuardFlags; the appended
+ * EP entry carries zeroed metadata. The new section RVA is larger than any
+ * original entry, so ascending order (required by the loader's binary
+ * search) is preserved by appending.
+ *
+ * Any unexpected layout (no LoadConfig, unsorted table, out-of-bounds)
+ * falls back to the legacy behavior of clearing GUARD_CF — degraded but
+ * matching the shipped v0.6.0 behavior instead of failing the pack.
+ */
+static int32_t PE_ModGuardCFRegister(PE_CONTEXT* ctx, uint32_t new_ep_rva)
+{
+    if (!ctx || !ctx->nt_headers || !ctx->new_section_data)
+        return PE_ERR_INVALID_PE;
+
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)ctx->nt_headers;
+    /* 数据目录索引 10 = IMAGE_DIRECTORY_ENTRY_LOADCONFIG */
+    IMAGE_DATA_DIRECTORY* loadCfgDir =
+        &((IMAGE_NT_HEADERS64*)nt)->OptionalHeader.DataDirectory[10];
+    uint16_t* dllChar = &((IMAGE_NT_HEADERS64*)nt)->OptionalHeader.DllCharacteristics;
+
+    /* 每入口的元数据步进（IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_MASK）：
+     * 条目大小 = 8 + extra，追加项的 extra 字节以 0 填充。
+     * 注意：GuardCFFunctionTable 是绝对 VA（随 .reloc 重定位），需减
+     * ImageBase 得 RVA。x64 LoadConfig 偏移（SDK winnt.h）：
+     *   SecurityCookie=0x58, SEHandlerTable/Count=0x60/0x68,
+     *   GuardCFFunctionTable=0x80, GuardCFFunctionCount=0x88, GuardFlags=0x90 */
+    uint32_t tableRva = 0, count = 0, flags = 0;
+    uint64_t imageBase = 0;
+    uint32_t cfgOff = 0;
+
+    if (loadCfgDir->VirtualAddress == 0 || loadCfgDir->Size < 0x94)
+        goto legacy_clear;
+    cfgOff = RvaToFileOffset(ctx, loadCfgDir->VirtualAddress);
+    if (cfgOff == 0 || cfgOff + loadCfgDir->Size > ctx->file_size)
+        goto legacy_clear;
+
+    {
+        /* ImageBase = OptionalHeader+24（PE32+），optional 头起于 pe_offset+24 */
+        imageBase = *(uint64_t*)(ctx->file_buffer + ctx->pe_offset + 48);
+        uint64_t tableVA = *(uint64_t*)(ctx->file_buffer + cfgOff + 0x80); /* GuardCFFunctionTable */
+        count = *(uint32_t*)(ctx->file_buffer + cfgOff + 0x88);             /* GuardCFFunctionCount  */
+        flags = *(uint32_t*)(ctx->file_buffer + cfgOff + 0x90);             /* GuardFlags            */
+        if (tableVA < imageBase)
+            goto legacy_clear;
+        tableRva = (uint32_t)(tableVA - imageBase);
+    }
+    if (tableRva == 0 || count == 0 || count > 0x100000)
+        goto legacy_clear;
+
+    {
+        uint32_t entryExtra = (flags >> 28) & 0x7;
+        /* 条目 = 4 字节 RVA + extra 字节元数据（并非固定 8 字节——certutil
+         * 实测 extra=0 时为纯 4 字节步进，误按 8 读会落到表外 ASCII） */
+        uint32_t entrySize = 4 + entryExtra;
+        uint32_t tableOff = RvaToFileOffset(ctx, tableRva);
+        if (tableOff == 0 || (uint64_t)tableOff + (uint64_t)count * entrySize > ctx->file_size)
+            goto legacy_clear;
+
+        /* 升序校验：加载器对 GFIDS 二分查找；新入口 RVA 必须大于末项才能追加 */
+        uint32_t lastRva = *(uint32_t*)(ctx->file_buffer + tableOff + (count - 1) * entrySize);
+        if (new_ep_rva <= lastRva)
+            goto legacy_clear;
+
+        /* 在 .enibox 数据尾部扩建新 GFIDS 表（节头/SizeOfImage 同步更新） */
+        uint32_t areaOff = (uint32_t)((ctx->new_section_size + 15) & ~15u);
+        uint32_t tableBytes = count * entrySize + entrySize; /* 原表 + 追加项 */
+        uint32_t newVirtualSize = areaOff + tableBytes;
+        uint32_t newRawSize = AlignUp(newVirtualSize, ctx->file_alignment);
+        uint32_t newSectionRva = 0;
+
+        /* 找 .enibox 节头 */
+        IMAGE_SECTION_HEADER* sections = (IMAGE_SECTION_HEADER*)ctx->section_table;
+        IMAGE_SECTION_HEADER* eni = NULL;
+        for (uint32_t i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+            if (memcmp(sections[i].Name, ".enibox", 8) == 0) { eni = &sections[i]; break; }
+        }
+        if (!eni)
+            goto legacy_clear;
+        newSectionRva = eni->VirtualAddress;
+
+        uint8_t* grown = (uint8_t*)realloc(ctx->new_section_data, newRawSize);
+        if (!grown)
+            return PE_ERR_NO_MEMORY;
+        ctx->new_section_data = grown;
+        memset(grown + ctx->new_section_size, 0, newRawSize - ctx->new_section_size);
+        memcpy(grown + areaOff, ctx->file_buffer + tableOff, count * entrySize);
+        *(uint32_t*)(grown + areaOff + count * entrySize) = new_ep_rva;
+        /* 追加项的 extra 元数据字节保持 0（memset 已清） */
+        ctx->new_section_size = newRawSize;
+
+        eni->Misc.VirtualSize = newVirtualSize;
+        eni->SizeOfRawData = newRawSize;
+        if (ctx->is_64bit) {
+            ((IMAGE_NT_HEADERS64*)nt)->OptionalHeader.SizeOfImage =
+                newSectionRva + AlignUp(newVirtualSize, ctx->section_alignment);
+        }
+
+        /* LoadConfig 重定向到新表；GuardFlags 原样保留（步进语义一致） */
+        *(uint64_t*)(ctx->file_buffer + cfgOff + 0x80) =
+            (uint64_t)imageBase + (newSectionRva + areaOff); /* GuardCFFunctionTable（绝对 VA） */
+        *(uint64_t*)(ctx->file_buffer + cfgOff + 0x88) = (uint64_t)(count + 1);
+        ctx->modified = TRUE;
+        return PE_SUCCESS;
+    }
+
+legacy_clear:
+    *dllChar &= ~0x4000; /* IMAGE_DLLCHARACTERISTICS_GUARD_CF */
     ctx->modified = TRUE;
     return PE_SUCCESS;
 }

@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **CLI 预置注册表值** — `--registry-value KEY|NAME|TYPE|DATA`（可重复；TYPE ∈ SZ|EXPAND_SZ|DWORD|BINARY，缺省 SZ），配合 `--registry-virtualization` 全 CLI 化封包；开关与预置值不匹配时双向告警
 
 ### Fixed
+- **CFG 加固二进制（MSVC 系统程序）封包后间接调用崩溃** — 旧做法清除 GUARD_CF 标志导致加载器跳过 CFG 位图初始化，`_guard_dispatch_icall` 首个间接调用即跳入非法地址（certutil.exe 实证）；现保持 GUARD_CF 并把新入口点登记进 GFIDS 表（表重建于 .enibox 尾部，条目 4 字节 RVA + GuardFlags 元数据步进）
 - **同键多条预置值静默丢失** — 序列化器曾把同键多值拆成独立键槽，读取只命中第一条（自注册表虚拟化引入即存在，验收代理复现）；现 C# 侧按 KeyPath 聚合、Loader 侧同路径条目合并双保险
 - **注册表值钩子并发窗口** — Query/Enum 虚拟分支改锁内读，SetValue/DeleteValue 墓碑守卫改锁内复查（删除 free 与无锁读的 UAF 窗口）
 - **GUI 单文件产物 `--cli` 路由失效**（v0.6.0 发布冒烟发现）— 路由开关被原样透传给参数解析器报「未知选项」，命中后剥离再解析；`--version` 现输出 `0.6.0+<commit>`
