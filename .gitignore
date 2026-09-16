@@ -104,3 +104,6 @@ tests/TestHelpers/*/publish/
 .hermes/
 .zcode/
 smoke/
+
+## 内部开发文档不随仓库发布 (2026-09-16)
+docs/
