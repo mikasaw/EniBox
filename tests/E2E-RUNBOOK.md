@@ -229,6 +229,15 @@ CI（windows-latest / Server 2022 / v143 构建）run 35015669441：`E2E_PackedS
 
 临时缓解：该测试在 CI 失败不影响其余 26 项；修复前可视为 W 族继承待验证。
 
+**2026-09-16 取证更新（w-inject-debug 工作流）**：关闭 runner 实时防护后，
+循环 10 轮 ChildInheritsParentVfs **10/10 全过**（注入/继承全链路含 A/W 两族）。
+对照时间线：唯一一次 W 族失败发生在实时防护开启的运行——结论：W 族失效与
+Defender 实时扫描新注入的 Loader DLL/子进程镜像相关（扫描窗口与注入后
+继承初始化竞争），非注入机制本身缺陷。缓解即 §5.1.2/上文的防护排除；
+本地开发机（防护开）偶发同类失败时，Loader 按设计优雅降级（子进程无
+VFS 但正常运行），诊断文件 %TEMP%\EniBox_diag_<pid>.log 可定位失败步骤。
+调查关闭，诊断点永久保留。
+
 ### 5.2 Standalone VfsTest.exe 跑出大量 FAIL
 
 **现象**: 直接运行 `publish\VfsTest.exe`（未封包）输出 `CHECK:FAIL:test_VfsFileRead` 等。
