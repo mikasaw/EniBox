@@ -16,6 +16,7 @@
 #include "hook_process.h"
 #include "inject.h"
 #include "vfs_link.h"
+#include "diag_file.h"
 #include "../deps/MinHook/include/MinHook.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -244,9 +245,9 @@ static BOOL WINAPI Hook_CreateProcessW(
         }
         {
             char d[128];
-            sprintf_s(d, sizeof(d), "[EniBox] inject W pid=%lu link=%d inj=%d",
+            sprintf_s(d, sizeof(d), "inject W pid=%lu link=%d inj=%d",
                       lpProcessInformation->dwProcessId, linkOk ? 1 : 0, injectResult);
-            OutputDebugStringA(d);
+            EniBox_DiagLine(d);
         }
         ResumeThread(lpProcessInformation->hThread);
     }
@@ -313,9 +314,9 @@ static BOOL WINAPI Hook_CreateProcessA(
         }
         {
             char d[128];
-            sprintf_s(d, sizeof(d), "[EniBox] inject A pid=%lu link=%d inj=%d",
+            sprintf_s(d, sizeof(d), "inject A pid=%lu link=%d inj=%d",
                       lpProcessInformation->dwProcessId, linkOk ? 1 : 0, injectResult);
-            OutputDebugStringA(d);
+            EniBox_DiagLine(d);
         }
         ResumeThread(lpProcessInformation->hThread);
     }

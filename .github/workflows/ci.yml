@@ -88,6 +88,19 @@ jobs:
         id: e2e
         shell: pwsh
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/verify-e2e.ps1 -SkipNativeBuild
+      - name: 输出 Loader 注入/继承诊断（§5.1.5 取证）
+        if: always()
+        shell: pwsh
+        run: |
+          $logs = Get-ChildItem "$env:TEMP\EniBox_diag_*.log" -ErrorAction SilentlyContinue
+          if ($logs) {
+            foreach ($l in $logs) {
+              Write-Host "=== $($l.Name)"
+              Get-Content $l.FullName | ForEach-Object { Write-Host "  $_" }
+            }
+          } else {
+            Write-Host "no EniBox_diag files"
+          }
       - name: 上传 TRX 报告 (失败时)
         if: failure()
         uses: actions/upload-artifact@v4

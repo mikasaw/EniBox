@@ -4,6 +4,7 @@
 #include "hook_process.h"
 #include "hook_registry.h"
 #include "vfs_link.h"
+#include "diag_file.h"
 #include <windows.h>
 #include <strsafe.h>
 #include <stdio.h>
@@ -224,11 +225,11 @@ void Loader_Finalize(void) {
  * must be writable). From here on this process serves the parent's VFS
  * through its own hooks. */
 
-/* 永久诊断点：OutputDebugString 在生产环境静默，接调试器/DebugView 可见 */
+/* 永久诊断点：写 %TEMP% 诊断文件（生产可用，见 include/diag_file.h） */
 static void VfsInherit_Diag(const char* step) {
     char d[96];
-    sprintf_s(d, sizeof(d), "[EniBox] inherit %s", step);
-    OutputDebugStringA(d);
+    sprintf_s(d, sizeof(d), "inherit %s", step);
+    EniBox_DiagLine(d);
 }
 
 static void Loader_TryInheritParentVfs(HMODULE hModule) {
