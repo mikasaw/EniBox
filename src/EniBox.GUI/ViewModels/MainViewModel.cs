@@ -60,6 +60,27 @@ namespace EniBox.GUI.ViewModels
         [ObservableProperty]
         private bool _enableSubProcessInjection = true;
 
+        /// <summary>注册表预置值编辑行（EnableRegistryVirtualization=true 时随包写入）。</summary>
+        public System.Collections.ObjectModel.ObservableCollection<RegistryPresetItem> RegistryPresets { get; } = new();
+
+        [ObservableProperty]
+        private RegistryPresetItem? _selectedRegistryPreset;
+
+        [RelayCommand]
+        private void AddRegistryPreset()
+        {
+            var item = new RegistryPresetItem { KeyPath = @"HKEY_CURRENT_USER\Software\MyApp" };
+            RegistryPresets.Add(item);
+            SelectedRegistryPreset = item;
+        }
+
+        [RelayCommand]
+        private void RemoveRegistryPreset()
+        {
+            if (SelectedRegistryPreset != null)
+                RegistryPresets.Remove(SelectedRegistryPreset);
+        }
+
         public MainViewModel(IPackService packService)
         {
             _packService = packService;
@@ -224,6 +245,26 @@ namespace EniBox.GUI.ViewModels
                 EnableRegistryVirtualization = EnableRegistryVirtualization,
                 EnableSubProcessInjection = EnableSubProcessInjection
             };
+
+            if (EnableRegistryVirtualization)
+            {
+                foreach (var preset in RegistryPresets)
+                {
+                    try
+                    {
+                        config.RegistryValues.Add(preset.ToPackValue());
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        MessageBox.Show(
+                            $"Registry preset value is invalid:\n{preset.KeyPath}|{preset.ValueName}|{preset.Type}|{preset.Data}\n\n{ex.Message}",
+                            "EniBox");
+                        IsPacking = false;
+                        CanCancel = false;
+                        return;
+                    }
+                }
+            }
 
             var progress = new Progress<PackProgress>(p =>
             {

@@ -15,6 +15,13 @@
     <sys:String x:Key="Str_Virtualize">Virtualize</sys:String>
     <sys:String x:Key="Str_RegVirt">Registry Virtualization</sys:String>
     <sys:String x:Key="Str_SubProc">Subprocess Injection</sys:String>
+    <sys:String x:Key="Str_RegPresets">Registry Preset Values</sys:String>
+    <sys:String x:Key="Str_RegKey">Key Path</sys:String>
+    <sys:String x:Key="Str_RegName">Value Name</sys:String>
+    <sys:String x:Key="Str_RegType">Type</sys:String>
+    <sys:String x:Key="Str_RegData">Data</sys:String>
+    <sys:String x:Key="Str_Add">Add</sys:String>
+    <sys:String x:Key="Str_Delete">Delete</sys:String>
     <sys:String x:Key="Str_Pack">Pack</sys:String>
     <sys:String x:Key="Str_Log">Log</sys:String>
 </ResourceDictionary>

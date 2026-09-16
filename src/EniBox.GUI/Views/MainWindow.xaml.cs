@@ -23,6 +23,12 @@ namespace EniBox.GUI.Views
             }
         }
 
+        private void RegistryDataGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (DataContext is MainViewModel vm && sender is DataGrid grid)
+                vm.SelectedRegistryPreset = grid.SelectedItem as RegistryPresetItem;
+        }
+
         private void Window_Drop(object sender, DragEventArgs e)
         {
             if (e.Data.GetDataPresent(DataFormats.FileDrop) && DataContext is MainViewModel vm)

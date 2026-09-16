@@ -14,6 +14,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Source EXE -->
@@ -63,8 +64,33 @@
             <CheckBox Content="{DynamicResource Str_SubProc}" IsChecked="{Binding EnableSubProcessInjection}"/>
         </StackPanel>
 
+        <!-- Registry Preset Values -->
+        <GroupBox Grid.Row="4" Header="{DynamicResource Str_RegPresets}" Margin="0,0,0,5"
+                  IsEnabled="{Binding EnableRegistryVirtualization}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Vertical" Margin="5,0,0,0">
+                    <Button Content="{DynamicResource Str_Add}" Command="{Binding AddRegistryPresetCommand}"
+                            Width="70" Margin="0,0,0,5"/>
+                    <Button Content="{DynamicResource Str_Delete}" Command="{Binding RemoveRegistryPresetCommand}"
+                            Width="70"/>
+                </StackPanel>
+                <DataGrid ItemsSource="{Binding RegistryPresets}" AutoGenerateColumns="False"
+                          CanUserAddRows="False" CanUserDeleteRows="False"
+                          SelectedItem="{Binding SelectedRegistryPreset}"
+                          SelectionChanged="RegistryDataGrid_SelectionChanged"
+                          MinHeight="60" MaxHeight="120">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="{DynamicResource Str_RegKey}" Binding="{Binding KeyPath}" Width="2.5*"/>
+                        <DataGridTextColumn Header="{DynamicResource Str_RegName}" Binding="{Binding ValueName}" Width="*"/>
+                        <DataGridTextColumn Header="{DynamicResource Str_RegType}" Binding="{Binding Type}" Width="Auto"/>
+                        <DataGridTextColumn Header="{DynamicResource Str_RegData}" Binding="{Binding Data}" Width="2*"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </DockPanel>
+        </GroupBox>
+
         <!-- Pack Button -->
-        <DockPanel Grid.Row="4" Margin="0,0,0,5">
+        <DockPanel Grid.Row="5" Margin="0,0,0,5">
             <Button Content="{DynamicResource Str_Pack}" Command="{Binding PackCommand}"
                     Width="120" Height="35" FontSize="14" FontWeight="Bold"
                     DockPanel.Dock="Right" Margin="10,0,0,0"/>
@@ -72,7 +98,7 @@
         </DockPanel>
 
         <!-- Log -->
-        <GroupBox Grid.Row="5" Header="{DynamicResource Str_Log}" Height="100">
+        <GroupBox Grid.Row="6" Header="{DynamicResource Str_Log}" Height="100">
             <TextBox Text="{Binding LogText}" IsReadOnly="True" VerticalScrollBarVisibility="Auto"
                      TextWrapping="Wrap" FontFamily="Consolas"/>
         </GroupBox>

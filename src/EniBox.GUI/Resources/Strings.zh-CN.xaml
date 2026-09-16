@@ -15,6 +15,13 @@
     <sys:String x:Key="Str_Virtualize">虚拟化</sys:String>
     <sys:String x:Key="Str_RegVirt">注册表虚拟化</sys:String>
     <sys:String x:Key="Str_SubProc">子进程注入</sys:String>
+    <sys:String x:Key="Str_RegPresets">注册表预置值</sys:String>
+    <sys:String x:Key="Str_RegKey">键路径</sys:String>
+    <sys:String x:Key="Str_RegName">值名称</sys:String>
+    <sys:String x:Key="Str_RegType">类型</sys:String>
+    <sys:String x:Key="Str_RegData">数据</sys:String>
+    <sys:String x:Key="Str_Add">添加</sys:String>
+    <sys:String x:Key="Str_Delete">删除</sys:String>
     <sys:String x:Key="Str_Pack">封包</sys:String>
     <sys:String x:Key="Str_Log">日志</sys:String>
 </ResourceDictionary>
