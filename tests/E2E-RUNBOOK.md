@@ -245,8 +245,24 @@ VMware Win10 x64 实机测试（vmrun 部署，宿主 Win11 26200 封包）：
   win10-av-cdb_out4.txt（LZMA 流字节转储）、win10-av-managed-stack.txt
   （托管栈）。
 
+  **Round 6-8 符号化调试（2026-09-17，PDB 进 guest，模块 token 为 EniBox_Loader 带下划线）**：
+  - 崩溃 ReadFile 的句柄 rcx=0xFFFF0000 = **合法 VFS 句柄（index 0，README）**，
+    在 Hook_ReadFile 入口断点有命中记录；
+  - AV 时条目完全正常：data_offset=0 / data_size=3738 / original_size=9070 /
+    is_compressed=1 —— **条目未被破坏**；
+  - data_region 起始 13 字节为合法 LZMA_ALONE 头（props 0x5D + dict 8MB +
+    size 9070），流字节与宿主磁盘逐一一致（python FORMAT_ALONE 解码 9070 字节
+    全对）——**流也未损坏**；
+  - 但解码器输入指针走到了 data_region+13+0x39E1C=镜像末尾——确定性解码在
+    相同字节上分叉仍不可解释，剩余嫌疑：① LzmaDec_Decompress 内部
+    bufLimit/边界处理存在缺陷（某条路径绕过 bufPos<bufLimit 检查）；
+    ② 解码前状态（probs 表 malloc 内容/range 初值）被并发或越界破坏；
+  - **下一轮**：单步 trace（cdb `wt`）Hook_ReadFile→LzmaDec 主循环，
+    监视 rc.bufPos 的跳变点；或对 probs/data_region 设写断点。
+
   **下一步精确切入点**（guest 内 cdb 已就绪 C:\dbg\，脚本
-  C:\enibox-testun_cdb*.cmd 可复用）：① 在 VFS_ReadFile 入口下
+  C:\enibox-test
+un_cdb*.cmd 可复用）：① 在 VFS_ReadFile 入口下
   断点打印 hFile/file_index/data_offset/data_size，抓被破坏的条目值；
   ② 对 ctx->files 区域设写断点（ba w8）找越界写来源；③ 核对
   VFS_IsVirtualHandle 的句柄值区间与 Win10 真实句柄的碰撞可能。
