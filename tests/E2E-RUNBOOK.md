@@ -260,6 +260,23 @@ VMware Win10 x64 实机测试（vmrun 部署，宿主 Win11 26200 封包）：
   - **下一轮**：单步 trace（cdb `wt`）Hook_ReadFile→LzmaDec 主循环，
     监视 rc.bufPos 的跳变点；或对 probs/data_region 设写断点。
 
+  **✅ 已修复（2026-09-17，条件断点 + 符号化调试定位）**：条件断点
+  （rax>0x2000 触发）实证解码器在 bufPos=8195（超过 data_size 3738）时
+  仍在读输入；AV 处句柄=0xFFFF0000（合法 VFS 句柄 index 0）、条目字段
+  全部正常、LZMA 流头合法（props 0x5D + dict 8MB + size 9070）且宿主
+  python FORMAT_ALONE 解码 9070 字节全对——排除条目破坏与流损坏后锁定
+  **LzmaDec_Decompress 手写解码器自身缺陷**：① DecodeLen 的 kLenHigh
+  （匹配长度≥8）路径返回常数 16/17 且丢弃 8 位解码结果、概率索引越界；
+  ② 简单匹配与重复匹配共用同一长度概率数组（应分别使用 LenCoder/
+  RepLenCoder）。状态机在首个 ≥8 匹配后脱轨，输入消费跑至镜像末尾。
+  **修复**：解码器整体替换为 LZMA SDK 官方参考实现（deps/lzma_sdk/
+  LzmaDec.c，公有领域，LzmaDecode 一次性 API），lzma_dec.c 保留为
+  13 字节 LZMA_ALONE 头的薄包装。Win10 VM 实测 CHECK:FILE_READ:OK
+  （与 Win11 输出一致）；E2E 全套绿（新解码器覆盖全部压缩 VFS 用例）。
+  附注：Win11 宿主上 fc_sc「正常」实为假通过——打包的 VirtualPath 为
+  相对路径与绝对打开路径不匹配，VFS 查找未命中走了宿主上真实存在的
+  同名文件；Win10 VM 无该文件才暴露真实缺陷。
+
   **下一步精确切入点**（guest 内 cdb 已就绪 C:\dbg\，脚本
   C:\enibox-test
 un_cdb*.cmd 可复用）：① 在 VFS_ReadFile 入口下

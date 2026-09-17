@@ -46,6 +46,7 @@
 #define LZMA_ERR_SIZE_MISMATCH  6303
 #define LZMA_ERR_INVALID_PROPS  6304
 #define LZMA_ERR_NO_MEMORY      6305
+#define LZMA_ERR_DECOMPRESS     6306
 
 /* Hook installation errors (6401-6499) */
 #define HOOK_ERR_CREATE_FILE_W      6401

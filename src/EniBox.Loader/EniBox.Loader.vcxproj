@@ -143,6 +143,7 @@
     <ClCompile Include="src\hook_registry.c" />
     <ClCompile Include="src\inject.c" />
     <ClCompile Include="src\lzma_dec.c" />
+    <ClCompile Include="deps\lzma_sdk\LzmaDec.c" />
     <ClCompile Include="src\crc32.c" />
     <ClCompile Include="deps\MinHook\src\hook.c" />
     <ClCompile Include="deps\MinHook\src\buffer.c" />
@@ -164,6 +165,8 @@
     <ClInclude Include="include\hook_registry.h" />
     <ClInclude Include="include\inject.h" />
     <ClInclude Include="include\lzma_dec.h" />
+    <ClInclude Include="deps\lzma_sdk\LzmaDec.h" />
+    <ClInclude Include="deps\lzma_sdk\7zTypes.h" />
     <ClInclude Include="include\crc32.h" />
     <ClInclude Include="deps\MinHook\include\MinHook.h" />
     <ClInclude Include="deps\MinHook\src\buffer.h" />
