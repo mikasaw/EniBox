@@ -227,10 +227,33 @@ VMware Win10 x64 实机测试（vmrun 部署，宿主 Win11 26200 封包）：
   .NET P/Invoke 路径**。
   序言静态对比（磁盘字节，两版 kernelbase.dll 导出表解析）：ReadFile/
   CreateFileW/WriteFile 的 Win10/Win11 序言均为普通 mov/push/sub 序列，
-  无 rip 相对或跳板敌对指令——「trampoline 复制失败」的简单解释被削弱，
-  怀疑 .NET 运行时与 inline hook 的交互（如 P/Invoke 存根与 detour 的
-  栈/寄存器约定差异）。**下一步需 VM 内核态/用户态调试器**：WinDbg
-  KDNET 附着，AV 断点处核对故障指令与 trampoline 运行时字节。
+  无 rip 相对或跳板敌对指令——「trampoline 复制失败」的简单解释被削弱。
+
+  **VM 内 cdb 实机调试（2026-09-17，便携 cdb 10.0.28000 进 guest）**：
+  AV 现场实证——故障指令在 **EniBox.Loader 自身的 LzmaDec 解码循环**
+  （range decoder 归一化 `cmp ebx,1000000h/shl ebx,8` + probs 写
+  `mov word ptr [r8+rdi*2],dx`），输入指针 rax+r15 越过
+  singlefilehost 镜像末尾（SizeOfImage 边界）一字节。r15 = .enibox
+  内 VFS 数据区 +0x1E4（README 流起始），rax = 已消费 0x39E1C =
+  237,084 字节——**解码器对 9070 字节的 README 消费了 237KB 输入**：
+  唯一解释是运行时 file->data_size（bufLimit）异常偏大或 VFS 条目
+  /句柄识别被破坏。而同一产物在 Win11 宿主解码正确（内容逐字节对）。
+  LZMA 确定性计算不会因 OS 分叉 ⇒ **存在 Win10 特有的内存破坏源**
+  （优先怀疑：某 hook 在 Win10 路径上越界写破坏 ctx->files 条目，或
+  VFS_IsVirtualHandle 对 Win10 真实句柄值误判导致错误关联 VFS 条目）。
+  证据文件：.diag/win10-av-cdb_out3.txt（AV 现场反汇编+寄存器+栈）、
+  win10-av-cdb_out4.txt（LZMA 流字节转储）、win10-av-managed-stack.txt
+  （托管栈）。
+
+  **下一步精确切入点**（guest 内 cdb 已就绪 C:\dbg\，脚本
+  C:\enibox-testun_cdb*.cmd 可复用）：① 在 VFS_ReadFile 入口下
+  断点打印 hFile/file_index/data_offset/data_size，抓被破坏的条目值；
+  ② 对 ctx->files 区域设写断点（ba w8）找越界写来源；③ 核对
+  VFS_IsVirtualHandle 的句柄值区间与 Win10 真实句柄的碰撞可能。
+  guest 侧 cdb 部署要点：需整个 Debuggersd 目录（含 api-ms-win-* 桩，
+  单拷 cdb+4DLL 会静默 exit 3）+ VC CRT 三件套（vcruntime140* 文件名
+  会被 guest Defender 拦写，需改名中转后 guest 内 copy 改回）；
+  exec 命令一律带 `< NUL` 可连续执行不受「一次名额」限制。
 - 佐证：mingw 编译的 tar.exe 封包在 Win11 正常（其非 CFG/非 IPCFG 特性
   与本问题无关，Win10 上的表现待下轮补测）。
 - 测试通道坑：Win10 VM 无 .NET 运行时，框架依赖封装产物启动即报
